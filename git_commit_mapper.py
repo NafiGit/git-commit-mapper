@@ -23,11 +23,26 @@ class CodeAnalyzer(ast.NodeVisitor):
         self.current_class = None
         self.current_method = None
         self.imports = {}
+        self.modules = defaultdict(lambda: {
+            'classes': set(),
+            'imported_modules': set(),
+            'exporting_to': set()
+        })
+        self.current_module = None
+        
+    def visit_Module(self, node):
+        """Process a module."""
+        # Store the current module name based on file path
+        self.current_module = getattr(self, 'file_path', 'unknown').split('/')[-1].replace('.py', '')
+        self.generic_visit(node)
         
     def visit_Import(self, node):
         """Process import statements."""
         for name in node.names:
+            module_name = name.name.split('.')[0]  # Get the top-level module
             self.imports[name.asname or name.name] = name.name
+            if self.current_module:
+                self.modules[self.current_module]['imported_modules'].add(module_name)
         self.generic_visit(node)
         
     def visit_ImportFrom(self, node):
@@ -67,6 +82,9 @@ class CodeAnalyzer(ast.NodeVisitor):
             'param_classes': set(),            # Classes used as parameters
             'return_classes': set(),           # Classes returned from methods
             'instantiated_classes': set(),     # Classes directly instantiated
+            'implements_interfaces': set(),    # Track interfaces/abstract classes implemented
+            'abstract_methods': set(),         # Track abstract methods defined in this class
+            'implemented_methods': set(),      # Track methods that implement abstract methods
         }
         
         # Extract parent classes
@@ -75,9 +93,35 @@ class CodeAnalyzer(ast.NodeVisitor):
             if base_name:
                 self.classes[node.name]['parent_classes'].append(base_name)
         
+        # Visit class body to extract methods and find abstract methods
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef):
+                # Check for @abstractmethod decorator
+                for decorator in item.decorator_list:
+                    if self._get_name_safely(decorator) == 'abstractmethod':
+                        self.classes[node.name]['abstract_methods'].add(item.name)
+        
         # Visit class body
         self.generic_visit(node)
+        
+        # After visiting, check if this class implements methods from abstract parents
+        self._check_interface_implementation()
+        
         self.current_class = None
+
+    def _check_interface_implementation(self):
+        """Check if the current class implements abstract methods from parent classes."""
+        if not self.current_class:
+            return
+        
+        # For each parent class
+        for parent in self.classes[self.current_class]['parent_classes']:
+            if parent in self.classes and self.classes[parent]['abstract_methods']:
+                # Check if any of the parent's abstract methods are implemented in this class
+                for abstract_method in self.classes[parent]['abstract_methods']:
+                    if abstract_method in self.classes[self.current_class]['methods']:
+                        self.classes[self.current_class]['implemented_methods'].add(abstract_method)
+                        self.classes[self.current_class]['implements_interfaces'].add(parent)
         
     def visit_FunctionDef(self, node):
         """Process function/method definitions."""
@@ -93,6 +137,31 @@ class CodeAnalyzer(ast.NodeVisitor):
                     # This is a method with self parameter
                     pass
             
+        # Check for factory method pattern
+        if self.current_class and node.returns:
+            return_type = self._get_name_safely(node.returns)
+            if return_type and return_type in self.classes:
+                # Method returns another class type - potential factory
+                self.classes[self.current_class].setdefault('factory_methods', {})
+                self.classes[self.current_class]['factory_methods'][node.name] = return_type
+                
+                # Also track the created class's factory relationship
+                self.classes[return_type].setdefault('created_by_factories', set())
+                self.classes[return_type]['created_by_factories'].add(f"{self.current_class}.{node.name}")
+        
+        # Check for constructor-based dependency injection
+        if self.current_class and node.name == '__init__':
+            for arg in node.args.args:
+                if arg.arg != 'self' and hasattr(arg, 'annotation'):
+                    injected_type = self._get_name_safely(arg.annotation)
+                    if injected_type in self.classes:
+                        self.classes[self.current_class].setdefault('injected_dependencies', set())
+                        self.classes[self.current_class]['injected_dependencies'].add(injected_type)
+                        
+                        # Track reverse relationship
+                        self.classes[injected_type].setdefault('injected_into', set())
+                        self.classes[injected_type]['injected_into'].add(self.current_class)
+        
         self.generic_visit(node)
         self.current_method = prev_method
         
@@ -110,7 +179,7 @@ class CodeAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
     
     def visit_Call(self, node):
-        """Process function/method calls."""
+        """Process function/method calls with event pattern detection."""
         if not self.current_class:
             self.generic_visit(node)
             return
@@ -136,6 +205,28 @@ class CodeAnalyzer(ast.NodeVisitor):
             else:
                 self.classes[self.current_class]['calls'].add(call_name)
                 
+        # Check for common event pattern methods
+        event_pattern_methods = {
+            'on_': 'subscriber',
+            'add_listener': 'subscriber',
+            'addEventListener': 'subscriber',
+            'emit': 'publisher',
+            'dispatch': 'publisher',
+            'trigger': 'publisher',
+            'notify': 'publisher'
+        }
+        
+        if self.current_class and isinstance(node.func, ast.Attribute):
+            method_name = node.func.attr
+            for pattern, role in event_pattern_methods.items():
+                if method_name.startswith(pattern) or method_name == pattern:
+                    if role == 'publisher':
+                        self.classes[self.current_class].setdefault('publishes_events', set())
+                        self.classes[self.current_class]['publishes_events'].add(method_name)
+                    elif role == 'subscriber':
+                        self.classes[self.current_class].setdefault('subscribes_to_events', set())
+                        self.classes[self.current_class]['subscribes_to_events'].add(method_name)
+        
         self.generic_visit(node)
 
     def visit_Assign(self, node):
@@ -205,14 +296,15 @@ def analyze_python_file(file_path):
             code = f.read()
         tree = ast.parse(code)
         analyzer = CodeAnalyzer()
+        analyzer.file_path = file_path  # Set file path for module name extraction
         analyzer.visit(tree)
-        return analyzer.classes
+        return analyzer.classes, analyzer.modules
     except Exception as e:
         print(f"Error analyzing {file_path}: {str(e)}")
-        return {}
+        return {}, {}
 
 
-def generate_ascii_diagram(classes):
+def generate_ascii_diagram(classes, modules=None):
     """Generate a comprehensive ASCII diagram showing class relationships."""
     if not classes:
         return "No classes found."
@@ -250,6 +342,62 @@ def generate_ascii_diagram(classes):
         for inst_cls in details.get('instantiated_classes', set()):
             if inst_cls in classes:
                 instantiation_connections.append((cls_name, inst_cls, "instantiates", "instantiation"))
+    
+    # Collect implementation relationships
+    implementation_connections = []
+    for cls_name, details in classes.items():
+        for interface in details.get('implements_interfaces', set()):
+            implementation_connections.append((
+                cls_name, 
+                interface, 
+                f"implements {', '.join(details.get('implemented_methods', set()))}", 
+                "implementation"
+            ))
+    
+    # Collect factory relationships
+    factory_connections = []
+    for cls_name, details in classes.items():
+        for factory_method, target_cls in details.get('factory_methods', {}).items():
+            factory_connections.append((
+                cls_name, 
+                target_cls, 
+                f"creates via {factory_method}()", 
+                "factory"
+            ))
+    
+    # Collect dependency injection relationships
+    di_connections = []
+    for cls_name, details in classes.items():
+        for dependency in details.get('injected_dependencies', set()):
+            di_connections.append((
+                cls_name, 
+                dependency, 
+                "depends on", 
+                "dependency_injection"
+            ))
+    
+    # Collect event relationships
+    event_connections = []
+    publishers = {}
+    subscribers = {}
+    
+    for cls_name, details in classes.items():
+        if 'publishes_events' in details:
+            for event in details['publishes_events']:
+                publishers[event] = cls_name
+        if 'subscribes_to_events' in details:
+            for event in details['subscribes_to_events']:
+                subscribers.setdefault(event, []).append(cls_name)
+    
+    # Match publishers with subscribers
+    for event, pub_cls in publishers.items():
+        for sub_cls in subscribers.get(event, []):
+            event_connections.append((
+                pub_cls, 
+                sub_cls, 
+                f"notifies via {event}", 
+                "event"
+            ))
     
     # Create class boxes with inheritance
     diagram.append("CLASS STRUCTURE:")
@@ -378,6 +526,30 @@ def generate_ascii_diagram(classes):
         for src, dest, label, _ in sorted(instantiation_connections, key=lambda x: (x[0], x[1])):
             diagram.append(f"  {src.ljust(15)} ⬢──[{label}]──→ {dest}")
     
+    # Add implementation relationships
+    if implementation_connections:
+        diagram.append("\nInterface Implementation Relationships:")
+        for src, dest, label, _ in sorted(implementation_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ⊳──[{label}]──→ {dest}")
+    
+    # Add factory relationships
+    if factory_connections:
+        diagram.append("\nFactory Method Relationships:")
+        for src, dest, label, _ in sorted(factory_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ⊕──[{label}]──→ {dest}")
+    
+    # Add dependency injection relationships
+    if di_connections:
+        diagram.append("\nDependency Injection Relationships:")
+        for src, dest, label, _ in sorted(di_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ⊖──[{label}]──→ {dest}")
+    
+    # Add event relationships
+    if event_connections:
+        diagram.append("\nEvent/Observer Relationships:")
+        for src, dest, label, _ in sorted(event_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ⚡──[{label}]──→ {dest}")
+    
     # Enhanced inheritance hierarchy visualization
     diagram.append("\nINHERITANCE HIERARCHY:")
     diagram.append("=====================")
@@ -436,6 +608,34 @@ def generate_ascii_diagram(classes):
                 
                 # Create a relationship-oriented graph
                 draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, "", True)
+    
+    # Add this after the class relationships
+    if modules:
+        diagram.append("\nMODULE DEPENDENCIES:")
+        diagram.append("===================")
+        
+        for module_name, details in sorted(modules.items()):
+            if details['imported_modules']:
+                diagram.append(f"\n{module_name} imports:")
+                for imported in sorted(details['imported_modules']):
+                    diagram.append(f"  └─→ {imported}")
+            
+            if 'classes' in details and details['classes']:
+                diagram.append(f"\n{module_name} defines classes:")
+                for cls in sorted(details['classes']):
+                    diagram.append(f"  └─→ {cls}")
+    
+    # Add design pattern detection
+    patterns = detect_design_patterns(classes)
+    if any(patterns.values()):
+        diagram.append("\nDETECTED DESIGN PATTERNS:")
+        diagram.append("=======================")
+        
+        for pattern, class_list in patterns.items():
+            if class_list:
+                diagram.append(f"\n{pattern} Pattern:")
+                for cls in sorted(class_list):
+                    diagram.append(f"  ⚙ {cls}")
     
     return "\n".join(diagram)
 
@@ -825,3 +1025,37 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main()) 
+
+def detect_design_patterns(classes):
+    """Detect common design patterns in the class structure."""
+    patterns = defaultdict(list)
+    
+    # Singleton pattern
+    for cls_name, details in classes.items():
+        # Check for private instance variable and getInstance method
+        has_instance_var = any('_instance' in attr for attr in details.get('attributes', set()))
+        has_get_instance = any('get_instance' in method or 'getInstance' in method 
+                              for method in details.get('methods', []))
+        if has_instance_var and has_get_instance:
+            patterns['Singleton'].append(cls_name)
+    
+    # Factory pattern
+    for cls_name, details in classes.items():
+        if 'factory_methods' in details and details['factory_methods']:
+            patterns['Factory'].append(cls_name)
+    
+    # Observer pattern
+    for cls_name, details in classes.items():
+        if ('publishes_events' in details and details['publishes_events'] and
+            'subscribes_to_events' in details and details['subscribes_to_events']):
+            patterns['Observer'].append(cls_name)
+    
+    # Builder pattern
+    for cls_name, details in classes.items():
+        # Check for methods that return self (chaining)
+        builder_methods = [m for m in details.get('methods', []) 
+                          if m.startswith('set') or m.startswith('with') or m.startswith('add')]
+        if len(builder_methods) >= 3 and 'build' in details.get('methods', []):
+            patterns['Builder'].append(cls_name)
+    
+    return patterns 
