@@ -304,6 +304,41 @@ def analyze_python_file(file_path):
         return {}, {}
 
 
+def detect_design_patterns(classes):
+    """Detect common design patterns in the class structure."""
+    patterns = defaultdict(list)
+    
+    # Singleton pattern
+    for cls_name, details in classes.items():
+        # Check for private instance variable and getInstance method
+        has_instance_var = any('_instance' in attr for attr in details.get('attributes', set()))
+        has_get_instance = any('get_instance' in method or 'getInstance' in method 
+                              for method in details.get('methods', []))
+        if has_instance_var and has_get_instance:
+            patterns['Singleton'].append(cls_name)
+    
+    # Factory pattern
+    for cls_name, details in classes.items():
+        if 'factory_methods' in details and details['factory_methods']:
+            patterns['Factory'].append(cls_name)
+    
+    # Observer pattern
+    for cls_name, details in classes.items():
+        if ('publishes_events' in details and details['publishes_events'] and
+            'subscribes_to_events' in details and details['subscribes_to_events']):
+            patterns['Observer'].append(cls_name)
+    
+    # Builder pattern
+    for cls_name, details in classes.items():
+        # Check for methods that return self (chaining)
+        builder_methods = [m for m in details.get('methods', []) 
+                          if m.startswith('set') or m.startswith('with') or m.startswith('add')]
+        if len(builder_methods) >= 3 and 'build' in details.get('methods', []):
+            patterns['Builder'].append(cls_name)
+    
+    return patterns
+
+
 def generate_ascii_diagram(classes, modules=None):
     """Generate a comprehensive ASCII diagram showing class relationships."""
     if not classes:
@@ -922,6 +957,7 @@ def analyze_commit(repo, commit, output_dir):
     repo.git.checkout(commit.hexsha, force=True)
     
     snapshot = {}
+    all_modules = {}
     
     # Analyze Python files
     for root, _, files in os.walk(repo.working_dir):
@@ -934,11 +970,12 @@ def analyze_commit(repo, commit, output_dir):
             
             # Only analyze Python files
             if file.endswith('.py'):
-                classes = analyze_python_file(file_path)
+                classes, modules = analyze_python_file(file_path)
                 snapshot.update(classes)
+                all_modules.update(modules)
     
     # Generate and save ASCII diagram
-    diagram = generate_ascii_diagram(snapshot)
+    diagram = generate_ascii_diagram(snapshot, all_modules)
     diagram_file = os.path.join(output_dir, f"diagram_{commit.hexsha[:7]}.txt")
     
     with open(diagram_file, 'w', encoding='utf-8') as f:
@@ -1025,37 +1062,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main()) 
-
-def detect_design_patterns(classes):
-    """Detect common design patterns in the class structure."""
-    patterns = defaultdict(list)
-    
-    # Singleton pattern
-    for cls_name, details in classes.items():
-        # Check for private instance variable and getInstance method
-        has_instance_var = any('_instance' in attr for attr in details.get('attributes', set()))
-        has_get_instance = any('get_instance' in method or 'getInstance' in method 
-                              for method in details.get('methods', []))
-        if has_instance_var and has_get_instance:
-            patterns['Singleton'].append(cls_name)
-    
-    # Factory pattern
-    for cls_name, details in classes.items():
-        if 'factory_methods' in details and details['factory_methods']:
-            patterns['Factory'].append(cls_name)
-    
-    # Observer pattern
-    for cls_name, details in classes.items():
-        if ('publishes_events' in details and details['publishes_events'] and
-            'subscribes_to_events' in details and details['subscribes_to_events']):
-            patterns['Observer'].append(cls_name)
-    
-    # Builder pattern
-    for cls_name, details in classes.items():
-        # Check for methods that return self (chaining)
-        builder_methods = [m for m in details.get('methods', []) 
-                          if m.startswith('set') or m.startswith('with') or m.startswith('add')]
-        if len(builder_methods) >= 3 and 'build' in details.get('methods', []):
-            patterns['Builder'].append(cls_name)
-    
-    return patterns 
