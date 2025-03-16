@@ -61,7 +61,12 @@ class CodeAnalyzer(ast.NodeVisitor):
             'props': set(),
             'serializers': set(),
             'api_calls': set(),
-            'parent_classes': []
+            'parent_classes': [],
+            'attributes': set(),               # Store class attributes
+            'composed_classes': set(),         # Classes used in composition
+            'param_classes': set(),            # Classes used as parameters
+            'return_classes': set(),           # Classes returned from methods
+            'instantiated_classes': set(),     # Classes directly instantiated
         }
         
         # Extract parent classes
@@ -133,6 +138,65 @@ class CodeAnalyzer(ast.NodeVisitor):
                 
         self.generic_visit(node)
 
+    def visit_Assign(self, node):
+        """Process attribute assignments (e.g., self.db = Database())."""
+        if not self.current_class:
+            self.generic_visit(node)
+            return
+        
+        # Track class attributes
+        if isinstance(node.targets[0], ast.Attribute) and isinstance(node.targets[0].value, ast.Name):
+            if node.targets[0].value.id == 'self':
+                attr_name = node.targets[0].attr
+                self.classes[self.current_class]['attributes'].add(attr_name)
+                
+                # Check for class instantiation in the assignment
+                if isinstance(node.value, ast.Call):
+                    class_name = self._get_name_safely(node.value.func)
+                    if class_name and not class_name.startswith(('self.', 'cls.')):
+                        self.classes[self.current_class]['instantiated_classes'].add(class_name)
+                        self.classes[self.current_class]['composed_classes'].add(class_name)
+            
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node):
+        """Process function/method definitions with type annotations."""
+        prev_method = self.current_method
+        self.current_method = node.name
+        
+        if self.current_class:
+            self.classes[self.current_class]['methods'].append(node.name)
+            
+            # Check for parameter type annotations
+            for arg in node.args.args:
+                if hasattr(arg, 'annotation') and arg.annotation:
+                    param_type = self._get_name_safely(arg.annotation)
+                    if param_type and param_type not in ('str', 'int', 'float', 'bool', 'list', 'dict', 'tuple'):
+                        self.classes[self.current_class]['param_classes'].add(param_type)
+            
+            # Check for return type annotations
+            if hasattr(node, 'returns') and node.returns:
+                return_type = self._get_name_safely(node.returns)
+                if return_type and return_type not in ('str', 'int', 'float', 'bool', 'list', 'dict', 'tuple', 'None'):
+                    self.classes[self.current_class]['return_classes'].add(return_type)
+        
+        self.generic_visit(node)
+        self.current_method = prev_method
+
+    def visit_Return(self, node):
+        """Process return statements to detect returned classes."""
+        if not self.current_class or not self.current_method:
+            self.generic_visit(node)
+            return
+        
+        # Check for class instantiation in return statements
+        if isinstance(node.value, ast.Call):
+            class_name = self._get_name_safely(node.value.func)
+            if class_name and not class_name.startswith(('self.', 'cls.')):
+                self.classes[self.current_class]['return_classes'].add(class_name)
+        
+        self.generic_visit(node)
+
 
 def analyze_python_file(file_path):
     """Analyze a Python file to extract class information."""
@@ -157,11 +221,35 @@ def generate_ascii_diagram(classes):
     method_map = defaultdict(list)
     connections = []
     serializer_connections = []
-
-    # Build method map and inheritance relationships
+    composition_connections = []
+    parameter_connections = []
+    return_connections = []
+    instantiation_connections = []
+    
+    # Build method map and relationship maps
     for cls_name, details in classes.items():
         for method in details['methods']:
             method_map[method].append(cls_name)
+        
+        # Collect composition relationships
+        for composed in details.get('composed_classes', set()):
+            if composed in classes:  # Only include classes that exist in our snapshot
+                composition_connections.append((cls_name, composed, "composes", "composition"))
+        
+        # Collect parameter type relationships
+        for param_cls in details.get('param_classes', set()):
+            if param_cls in classes:
+                parameter_connections.append((cls_name, param_cls, "uses as parameter", "parameter"))
+        
+        # Collect return type relationships
+        for return_cls in details.get('return_classes', set()):
+            if return_cls in classes:
+                return_connections.append((cls_name, return_cls, "returns", "return"))
+        
+        # Collect instantiation relationships
+        for inst_cls in details.get('instantiated_classes', set()):
+            if inst_cls in classes:
+                instantiation_connections.append((cls_name, inst_cls, "instantiates", "instantiation"))
     
     # Create class boxes with inheritance
     diagram.append("CLASS STRUCTURE:")
@@ -266,33 +354,94 @@ def generate_ascii_diagram(classes):
         for src, dest, label, _ in sorted(serializer_connections, key=lambda x: (x[0], x[1])):
             diagram.append(f"  {src.ljust(15)} ──[{label}]──→ {dest}")
 
-    # If there are enough classes, add a class dependency graph
-    if len(classes) > 1 and method_connections:
-        diagram.append("\nCLASS DEPENDENCY GRAPH:")
-        diagram.append("======================")
-        diagram.append("")
+    # Add composition relationships
+    if composition_connections:
+        diagram.append("\nComposition Relationships:")
+        for src, dest, label, _ in sorted(composition_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ◆──[{label}]──→ {dest}")
+    
+    # Add parameter type relationships
+    if parameter_connections:
+        diagram.append("\nParameter Type Relationships:")
+        for src, dest, label, _ in sorted(parameter_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ○──[{label}]──→ {dest}")
+    
+    # Add return type relationships
+    if return_connections:
+        diagram.append("\nReturn Type Relationships:")
+        for src, dest, label, _ in sorted(return_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ●──[{label}]──→ {dest}")
+    
+    # Add class instantiation relationships
+    if instantiation_connections:
+        diagram.append("\nClass Instantiation Relationships:")
+        for src, dest, label, _ in sorted(instantiation_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ⬢──[{label}]──→ {dest}")
+    
+    # Enhanced inheritance hierarchy visualization
+    diagram.append("\nINHERITANCE HIERARCHY:")
+    diagram.append("=====================")
+    
+    # Build inheritance tree
+    root_classes = []
+    inheritance_map = defaultdict(list)
+    
+    for cls_name, details in classes.items():
+        parents = details.get('parent_classes', [])
+        if not parents:
+            root_classes.append(cls_name)
+        for parent in parents:
+            if parent in classes:  # Only include classes that exist in our snapshot
+                inheritance_map[parent].append(cls_name)
+    
+    # Draw inheritance tree
+    def draw_inheritance(class_name, prefix="", is_last=True):
+        connector = "└── " if is_last else "├── "
+        diagram.append(f"{prefix}{connector}{class_name}")
         
-        # Build a simplified graph of class dependencies
-        graph = defaultdict(set)
-        for src, dest, _, _ in method_connections:
-            if dest != "API":
-                graph[src].add(dest)
+        children = sorted(inheritance_map.get(class_name, []))
+        prefix_extension = "    " if is_last else "│   "
+        for i, child in enumerate(children):
+            draw_inheritance(child, prefix + prefix_extension, i == len(children) - 1)
+    
+    # Draw trees starting from root classes
+    for i, cls in enumerate(sorted(root_classes)):
+        is_last = i == len(root_classes) - 1
+        draw_inheritance(cls, "", is_last)
+    
+    # If there are enough classes, add the full relationship graph
+    if len(classes) > 1:
+        all_connections = (
+            [(s, d, "calls methods in") for s, d, _, _ in method_connections] +
+            [(s, d, "composed of") for s, d, _, _ in composition_connections] +
+            [(s, d, "uses as param") for s, d, _, _ in parameter_connections] +
+            [(s, d, "returns") for s, d, _, _ in return_connections]
+        )
         
-        # Generate a simple graphical representation
-        drawn_classes = set()
-        for cls_name in sorted(classes.keys()):
-            if cls_name in drawn_classes:
-                continue
+        if all_connections:
+            diagram.append("\nFULL CLASS RELATIONSHIP GRAPH:")
+            diagram.append("============================")
+            diagram.append("")
+            
+            # Build detailed relationship graph
+            relationship_graph = defaultdict(lambda: defaultdict(set))
+            for src, dest, rel_type in all_connections:
+                relationship_graph[src][dest].add(rel_type)
+            
+            # Generate visual graph
+            drawn_classes = set()
+            for cls_name in sorted(classes.keys()):
+                if cls_name in drawn_classes:
+                    continue
                 
-            # Draw this class and its dependencies
-            draw_class_tree(diagram, cls_name, graph, drawn_classes, "", True)
+                # Create a relationship-oriented graph
+                draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, "", True)
     
     return "\n".join(diagram)
 
-def draw_class_tree(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True):
-    """Helper function to draw a tree representation of class dependencies."""
+def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True):
+    """Helper function to draw a comprehensive relationship graph."""
     if cls_name in drawn_classes:
-        # If we've drawn this class before, just note it's a reference
         branch = "└── " if is_last else "├── "
         diagram.append(f"{prefix}{branch}{cls_name} (reference)")
         return
@@ -304,14 +453,25 @@ def draw_class_tree(diagram, cls_name, graph, drawn_classes, prefix="", is_last=
     branch = "└── " if is_last else "├── "
     diagram.append(f"{prefix}{branch}{cls_name}")
     
-    # Calculate new prefix for children
+    # Calculate new prefix for relationships
     new_prefix = prefix + ("    " if is_last else "│   ")
     
-    # Draw dependencies
-    dependencies = sorted(graph[cls_name])
-    for i, dep in enumerate(dependencies):
-        is_last_dep = (i == len(dependencies) - 1)
-        draw_class_tree(diagram, dep, graph, drawn_classes, new_prefix, is_last_dep)
+    # Find all relationships for this class
+    relationships = []
+    for target, rel_types in graph.get(cls_name, {}).items():
+        relationships.append((target, rel_types))
+    
+    # Draw relationships
+    for i, (target, rel_types) in enumerate(sorted(relationships)):
+        is_last_rel = (i == len(relationships) - 1)
+        rel_branch = "└── " if is_last_rel else "├── "
+        rel_types_str = ", ".join(sorted(rel_types))
+        diagram.append(f"{new_prefix}{rel_branch}→ {target} [{rel_types_str}]")
+        
+        # Recursively draw the target's relationships if not already drawn
+        if target not in drawn_classes:
+            target_prefix = new_prefix + ("    " if is_last_rel else "│   ")
+            draw_relationship_graph(diagram, target, graph, drawn_classes, target_prefix, True)
 
 
 def diff_snapshots(old_snapshot, new_snapshot):
@@ -378,6 +538,42 @@ def diff_snapshots(old_snapshot, new_snapshot):
             changes['props'] = {
                 'added': list(added_props),
                 'removed': list(removed_props)
+            }
+        
+        # Compare composition relationships
+        old_composed = set(old_class.get('composed_classes', set()))
+        new_composed = set(new_class.get('composed_classes', set()))
+        if old_composed != new_composed:
+            changes['composed_classes'] = {
+                'added': list(new_composed - old_composed),
+                'removed': list(old_composed - new_composed)
+            }
+        
+        # Compare parameter type relationships
+        old_params = set(old_class.get('param_classes', set()))
+        new_params = set(new_class.get('param_classes', set()))
+        if old_params != new_params:
+            changes['param_classes'] = {
+                'added': list(new_params - old_params),
+                'removed': list(old_params - new_params)
+            }
+        
+        # Compare return type relationships
+        old_returns = set(old_class.get('return_classes', set()))
+        new_returns = set(new_class.get('return_classes', set()))
+        if old_returns != new_returns:
+            changes['return_classes'] = {
+                'added': list(new_returns - old_returns),
+                'removed': list(old_returns - new_returns)
+            }
+        
+        # Compare instantiation relationships
+        old_inst = set(old_class.get('instantiated_classes', set()))
+        new_inst = set(new_class.get('instantiated_classes', set()))
+        if old_inst != new_inst:
+            changes['instantiated_classes'] = {
+                'added': list(new_inst - old_inst),
+                'removed': list(old_inst - new_inst)
             }
         
         # Only add to diff if there were changes
@@ -468,6 +664,50 @@ def format_diff(diff, old_commit_id, new_commit_id):
                     lines.append("      Removed props:")
                     for prop in sorted(changes['props']['removed']):
                         lines.append(f"        - {prop}")
+            
+            # Composition changes
+            if 'composed_classes' in changes:
+                if changes['composed_classes']['added']:
+                    lines.append("      Added composed classes:")
+                    for class_name in sorted(changes['composed_classes']['added']):
+                        lines.append(f"        + {class_name}")
+                if changes['composed_classes']['removed']:
+                    lines.append("      Removed composed classes:")
+                    for class_name in sorted(changes['composed_classes']['removed']):
+                        lines.append(f"        - {class_name}")
+            
+            # Parameter type changes
+            if 'param_classes' in changes:
+                if changes['param_classes']['added']:
+                    lines.append("      Added parameter classes:")
+                    for class_name in sorted(changes['param_classes']['added']):
+                        lines.append(f"        + {class_name}")
+                if changes['param_classes']['removed']:
+                    lines.append("      Removed parameter classes:")
+                    for class_name in sorted(changes['param_classes']['removed']):
+                        lines.append(f"        - {class_name}")
+            
+            # Return type changes
+            if 'return_classes' in changes:
+                if changes['return_classes']['added']:
+                    lines.append("      Added return classes:")
+                    for class_name in sorted(changes['return_classes']['added']):
+                        lines.append(f"        + {class_name}")
+                if changes['return_classes']['removed']:
+                    lines.append("      Removed return classes:")
+                    for class_name in sorted(changes['return_classes']['removed']):
+                        lines.append(f"        - {class_name}")
+            
+            # Instantiation changes
+            if 'instantiated_classes' in changes:
+                if changes['instantiated_classes']['added']:
+                    lines.append("      Added instantiated classes:")
+                    for class_name in sorted(changes['instantiated_classes']['added']):
+                        lines.append(f"        + {class_name}")
+                if changes['instantiated_classes']['removed']:
+                    lines.append("      Removed instantiated classes:")
+                    for class_name in sorted(changes['instantiated_classes']['removed']):
+                        lines.append(f"        - {class_name}")
             
             lines.append("")
     
