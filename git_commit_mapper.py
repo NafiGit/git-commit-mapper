@@ -149,68 +149,169 @@ def analyze_python_file(file_path):
 
 
 def generate_ascii_diagram(classes):
-    """Generate an ASCII diagram of classes and their relationships."""
+    """Generate a comprehensive ASCII diagram showing class relationships."""
     if not classes:
         return "No classes found."
     
-    lines = []
-    lines.append("CLASS DIAGRAM:")
-    lines.append("=============")
-    lines.append("")
-    
-    # Generate class boxes
-    for class_name, details in classes.items():
-        # Top border
-        width = max(len(class_name), 20)
-        lines.append("+" + "-" * width + "+")
-        
-        # Class name
-        lines.append(f"| {class_name.ljust(width-1)}|")
-        
-        # Separator
-        lines.append("+" + "-" * width + "+")
-        
-        # Methods
+    diagram = []
+    method_map = defaultdict(list)
+    connections = []
+    serializer_connections = []
+
+    # Build method map and inheritance relationships
+    for cls_name, details in classes.items():
         for method in details['methods']:
-            lines.append(f"| {method}()".ljust(width+1) + "|")
-        
-        # Properties section if applicable
-        if details['states'] or details['props']:
-            lines.append("|" + "-" * width + "|")
-            for state in details['states']:
-                lines.append(f"| state: {state}".ljust(width+1) + "|")
-            for prop in details['props']:
-                lines.append(f"| prop: {prop}".ljust(width+1) + "|")
-        
-        # Bottom border
-        lines.append("+" + "-" * width + "+")
-        lines.append("")
+            method_map[method].append(cls_name)
     
-    # Generate connections
-    lines.append("CONNECTIONS:")
-    lines.append("============")
-    lines.append("")
-    
-    for class_name, details in classes.items():
-        if details['calls']:
-            lines.append(f"{class_name} calls:")
-            for call in sorted(details['calls']):
-                lines.append(f"  └─→ {call}")
-            lines.append("")
+    # Create class boxes with inheritance
+    diagram.append("CLASS STRUCTURE:")
+    diagram.append("================")
+    for cls_name, details in classes.items():
+        # Class header with inheritance
+        parents = details['parent_classes']
+        class_header = f"╭─ {cls_name}"
+        if parents:
+            class_header += f" ({' ← '.join(parents)})"
+        class_header += " ────────────────────╮"
+        diagram.append(class_header)
         
-        if details['api_calls']:
-            lines.append(f"{class_name} API calls:")
-            for api in sorted(details['api_calls']):
-                lines.append(f"  └─→ API: {api}")
-            lines.append("")
-            
-        if details['serializers']:
-            lines.append(f"{class_name} serializers:")
-            for serializer in sorted(details['serializers']):
-                lines.append(f"  └─→ {serializer}")
-            lines.append("")
+        # Body content
+        body = [
+            f"│ {'Methods:':<16} {', '.join(details['methods']) or 'None'}",
+            f"│ {'States:':<16} {', '.join(details['states']) or 'None'}",
+            f"│ {'Props:':<16} {', '.join(details['props']) or 'None'}",
+            f"│ {'Serializers:':<16} {', '.join(details['serializers']) or 'None'}"
+        ]
+        
+        # Find connections
+        for called in details['calls']:
+            # Check if call matches a method in other classes
+            for target_cls in classes:
+                if cls_name == target_cls:
+                    continue
+                
+                # Check if the call directly targets another class (ClassName.method)
+                if called.startswith(target_cls + '.'):
+                    connections.append((
+                        cls_name, 
+                        target_cls, 
+                        f"calls: {called}",
+                        "method"
+                    ))
+                    continue
+                
+                # Check if the call matches another class's method
+                if called in classes[target_cls]['methods']:
+                    connections.append((
+                        cls_name, 
+                        target_cls, 
+                        f"calls: {called}()",
+                        "method"
+                    ))
+        
+        # API connections
+        for api_call in details['api_calls']:
+            connections.append((
+                cls_name,
+                "API",
+                f"→ {api_call}",
+                "api"
+            ))
+        
+        # Serializer connections
+        for serializer in details['serializers']:
+            # Check if serializer name matches or refers to another class
+            for target_cls in classes:
+                if target_cls.lower() in serializer.lower():
+                    serializer_connections.append((
+                        cls_name,
+                        target_cls,
+                        f"serializes with: {serializer}",
+                        "serializer"
+                    ))
+                    break
+            else:
+                serializer_connections.append((
+                    cls_name,
+                    serializer,
+                    "serializes",
+                    "serializer"
+                ))
+
+        diagram.extend(body)
+        diagram.append("╰───────────────────────────────────────────────╯")
+        diagram.append("")
+
+    # Add communication map
+    diagram.append("\nCLASS COMMUNICATIONS:")
+    diagram.append("=====================")
     
-    return "\n".join(lines)
+    # Method calls between classes
+    method_connections = [c for c in connections if c[3] == "method"]
+    if method_connections:
+        diagram.append("\nMethod Calls:")
+        for src, dest, label, _ in sorted(method_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ───[{label}]──→ {dest}")
+    
+    # API calls
+    api_connections = [c for c in connections if c[3] == "api"]
+    if api_connections:
+        diagram.append("\nAPI Communications:")
+        for src, _, label, _ in sorted(api_connections, key=lambda x: x[0]):
+            diagram.append(f"  {src.ljust(15)} ──{label}──→ External API")
+
+    # Serializer relationships
+    if serializer_connections:
+        diagram.append("\nSerializer Usage:")
+        for src, dest, label, _ in sorted(serializer_connections, key=lambda x: (x[0], x[1])):
+            diagram.append(f"  {src.ljust(15)} ──[{label}]──→ {dest}")
+
+    # If there are enough classes, add a class dependency graph
+    if len(classes) > 1 and method_connections:
+        diagram.append("\nCLASS DEPENDENCY GRAPH:")
+        diagram.append("======================")
+        diagram.append("")
+        
+        # Build a simplified graph of class dependencies
+        graph = defaultdict(set)
+        for src, dest, _, _ in method_connections:
+            if dest != "API":
+                graph[src].add(dest)
+        
+        # Generate a simple graphical representation
+        drawn_classes = set()
+        for cls_name in sorted(classes.keys()):
+            if cls_name in drawn_classes:
+                continue
+                
+            # Draw this class and its dependencies
+            draw_class_tree(diagram, cls_name, graph, drawn_classes, "", True)
+    
+    return "\n".join(diagram)
+
+def draw_class_tree(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True):
+    """Helper function to draw a tree representation of class dependencies."""
+    if cls_name in drawn_classes:
+        # If we've drawn this class before, just note it's a reference
+        branch = "└── " if is_last else "├── "
+        diagram.append(f"{prefix}{branch}{cls_name} (reference)")
+        return
+    
+    # Mark this class as drawn
+    drawn_classes.add(cls_name)
+    
+    # Draw the current class
+    branch = "└── " if is_last else "├── "
+    diagram.append(f"{prefix}{branch}{cls_name}")
+    
+    # Calculate new prefix for children
+    new_prefix = prefix + ("    " if is_last else "│   ")
+    
+    # Draw dependencies
+    dependencies = sorted(graph[cls_name])
+    for i, dep in enumerate(dependencies):
+        is_last_dep = (i == len(dependencies) - 1)
+        draw_class_tree(diagram, dep, graph, drawn_classes, new_prefix, is_last_dep)
 
 
 def diff_snapshots(old_snapshot, new_snapshot):
