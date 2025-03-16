@@ -11,10 +11,15 @@ import os
 import ast
 import sys
 import argparse
+import hashlib
+import pickle
+from functools import lru_cache
 from git import Repo, GitCommandError
 from collections import defaultdict
 import re
 import graphviz
+import multiprocessing as mp
+from datetime import datetime
 
 # ANSI color codes for terminal output
 class Colors:
@@ -42,6 +47,14 @@ class Colors:
     BG_CYAN = '\033[46m'
     BG_WHITE = '\033[47m'
 
+# Define a module-level function for defaultdict to fix pickling issues
+def _create_module_dict():
+    return {
+        'classes': set(),
+        'imported_modules': set(),
+        'exporting_to': set()
+    }
+
 class CodeAnalyzer(ast.NodeVisitor):
     """Analyzes Python code to extract classes and their communications."""
     
@@ -50,12 +63,24 @@ class CodeAnalyzer(ast.NodeVisitor):
         self.current_class = None
         self.current_method = None
         self.imports = {}
-        self.modules = defaultdict(lambda: {
-            'classes': set(),
-            'imported_modules': set(),
-            'exporting_to': set()
-        })
+        self.modules = defaultdict(_create_module_dict)
         self.current_module = None
+        
+        # Common decorator patterns
+        self.pattern_decorators = {
+            'singleton': ['singleton', 'Singleton'],
+            'factory': ['factory', 'Factory', 'factory_method'],
+            'observer': ['observer', 'Observable', 'event_listener'],
+            'command': ['command', 'Command'],
+            'strategy': ['strategy', 'Strategy'],
+            'adapter': ['adapter', 'Adapter'],
+            'decorator': ['decorator', 'Decorator'],
+            'facade': ['facade', 'Facade'],
+            'proxy': ['proxy', 'Proxy'],
+            'template': ['template_method', 'Template'],
+            'state': ['state', 'State'],
+            'builder': ['builder', 'Builder'],
+        }
         
     def visit_Module(self, node):
         """Process a module."""
@@ -112,7 +137,26 @@ class CodeAnalyzer(ast.NodeVisitor):
             'implements_interfaces': set(),    # Track interfaces/abstract classes implemented
             'abstract_methods': set(),         # Track abstract methods defined in this class
             'implemented_methods': set(),      # Track methods that implement abstract methods
+            'decorators': set(),               # Track decorators used by the class
+            'decorator_patterns': set(),       # Track design patterns identified from decorators
+            'raises_exceptions': set(),        # Track exceptions raised by methods
+            'catches_exceptions': set(),       # Track exceptions caught in try-except blocks
+            'lambda_count': 0,                 # Count of lambda expressions
+            'generator_count': 0,              # Count of generator functions
+            'context_managers': set(),         # Track context manager methods (__enter__, __exit__)
         }
+        
+        # Check if class has decorators and identify patterns
+        for decorator in node.decorator_list:
+            decorator_name = self._get_name_safely(decorator)
+            if decorator_name:
+                self.classes[node.name]['decorators'].add(decorator_name)
+                
+                # Check if decorator indicates a design pattern
+                for pattern, pattern_decorators in self.pattern_decorators.items():
+                    for pattern_decorator in pattern_decorators:
+                        if pattern_decorator.lower() in decorator_name.lower():
+                            self.classes[node.name]['decorator_patterns'].add(pattern)
         
         # Extract parent classes
         for base in node.bases:
@@ -315,9 +359,134 @@ class CodeAnalyzer(ast.NodeVisitor):
         
         self.generic_visit(node)
 
+    def visit_Lambda(self, node):
+        """Count lambda expressions in classes."""
+        if self.current_class:
+            self.classes[self.current_class]['lambda_count'] += 1
+        self.generic_visit(node)
+    
+    def visit_With(self, node):
+        """Process 'with' statements to identify context manager usage."""
+        if not self.current_class:
+            self.generic_visit(node)
+            return
+            
+        # Extract context manager class/object
+        for item in node.items:
+            context_expr = item.context_expr
+            context_name = self._get_name_safely(context_expr)
+            if context_name:
+                self.classes[self.current_class].setdefault('uses_context_managers', set())
+                self.classes[self.current_class]['uses_context_managers'].add(context_name)
+                
+                # Check if context relates to a known class
+                for cls_name in self.classes:
+                    if context_name.startswith(cls_name + '.') or context_name == cls_name:
+                        self.classes[cls_name].setdefault('used_as_context_manager', set())
+                        self.classes[cls_name]['used_as_context_manager'].add(self.current_class)
+        
+        self.generic_visit(node)
+    
+    def visit_Raise(self, node):
+        """Process raise statements to track exception flows."""
+        if not self.current_class or not self.current_method:
+            self.generic_visit(node)
+            return
+            
+        # Extract exception type
+        if hasattr(node, 'exc') and node.exc:
+            exc_type = self._get_name_safely(node.exc)
+            if exc_type:
+                self.classes[self.current_class]['raises_exceptions'].add(exc_type)
+        
+        self.generic_visit(node)
+    
+    def visit_ExceptHandler(self, node):
+        """Process except handlers to track caught exceptions."""
+        if not self.current_class:
+            self.generic_visit(node)
+            return
+            
+        # Extract exception type
+        if node.type:
+            exc_type = self._get_name_safely(node.type)
+            if exc_type:
+                self.classes[self.current_class]['catches_exceptions'].add(exc_type)
+        
+        self.generic_visit(node)
 
-def analyze_python_file(file_path):
+
+# Cache for file contents and analysis results
+class AnalysisCache:
+    """Cache for storing analysis results to avoid reprocessing unchanged files."""
+    
+    def __init__(self, cache_dir=".analysis_cache"):
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+        self.cache = {}
+        self.load_cache()
+    
+    def load_cache(self):
+        """Load existing cache from disk if available."""
+        cache_file = os.path.join(self.cache_dir, "analysis_cache.pkl")
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    self.cache = pickle.load(f)
+                print(f"Loaded {len(self.cache)} cached file analyses")
+            except Exception as e:
+                print(f"Error loading cache: {e}")
+                self.cache = {}
+    
+    def save_cache(self):
+        """Save cache to disk."""
+        cache_file = os.path.join(self.cache_dir, "analysis_cache.pkl")
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(self.cache, f)
+        except Exception as e:
+            print(f"Error saving cache: {e}")
+    
+    def get_file_hash(self, file_path):
+        """Calculate hash of file contents."""
+        try:
+            with open(file_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+            return file_hash
+        except Exception:
+            return None
+    
+    def get_analysis(self, file_path, commit_id):
+        """Get cached analysis if available."""
+        file_hash = self.get_file_hash(file_path)
+        if not file_hash:
+            return None
+        
+        cache_key = f"{commit_id}:{file_path}"
+        if cache_key in self.cache and self.cache[cache_key]['hash'] == file_hash:
+            return self.cache[cache_key]['result']
+        return None
+    
+    def store_analysis(self, file_path, commit_id, result):
+        """Store analysis result in cache."""
+        file_hash = self.get_file_hash(file_path)
+        if file_hash:
+            cache_key = f"{commit_id}:{file_path}"
+            self.cache[cache_key] = {
+                'hash': file_hash,
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            }
+
+
+def analyze_python_file(file_path, commit_id=None, cache=None):
     """Analyze a Python file to extract class information."""
+    # Check cache first if available
+    if cache and commit_id:
+        cached_result = cache.get_analysis(file_path, commit_id)
+        if cached_result:
+            return cached_result
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             code = f.read()
@@ -325,7 +494,13 @@ def analyze_python_file(file_path):
         analyzer = CodeAnalyzer()
         analyzer.file_path = file_path  # Set file path for module name extraction
         analyzer.visit(tree)
-        return analyzer.classes, analyzer.modules
+        result = (analyzer.classes, analyzer.modules)
+        
+        # Store in cache if available
+        if cache and commit_id:
+            cache.store_analysis(file_path, commit_id, result)
+            
+        return result
     except Exception as e:
         print(f"Error analyzing {file_path}: {str(e)}")
         return {}, {}
@@ -343,17 +518,46 @@ def detect_design_patterns(classes):
                               for method in details.get('methods', []))
         if has_instance_var and has_get_instance:
             patterns['Singleton'].append(cls_name)
+        
+        # Check if flagged by a decorator
+        if 'singleton' in details.get('decorator_patterns', set()):
+            if cls_name not in patterns['Singleton']:
+                patterns['Singleton'].append(cls_name)
     
     # Factory pattern
     for cls_name, details in classes.items():
         if 'factory_methods' in details and details['factory_methods']:
             patterns['Factory'].append(cls_name)
+        
+        # Check if flagged by a decorator
+        if 'factory' in details.get('decorator_patterns', set()):
+            if cls_name not in patterns['Factory']:
+                patterns['Factory'].append(cls_name)
+            
+        # Check for methods that create and return objects
+        create_methods = [m for m in details.get('methods', []) 
+                        if m.startswith('create') or m.startswith('make') or m.startswith('build')]
+        if create_methods and details.get('return_classes'):
+            if cls_name not in patterns['Factory']:
+                patterns['Factory'].append(cls_name)
     
     # Observer pattern
     for cls_name, details in classes.items():
         if ('publishes_events' in details and details['publishes_events'] and
             'subscribes_to_events' in details and details['subscribes_to_events']):
             patterns['Observer'].append(cls_name)
+        
+        # Check if class has observer methods like notify, addObserver, etc.
+        observer_methods = ('notify', 'addObserver', 'removeObserver', 'update')
+        has_observer_methods = any(method in observer_methods for method in details.get('methods', []))
+        if has_observer_methods:
+            if cls_name not in patterns['Observer']:
+                patterns['Observer'].append(cls_name)
+                
+        # Check if flagged by a decorator
+        if 'observer' in details.get('decorator_patterns', set()):
+            if cls_name not in patterns['Observer']:
+                patterns['Observer'].append(cls_name)
     
     # Builder pattern
     for cls_name, details in classes.items():
@@ -362,6 +566,58 @@ def detect_design_patterns(classes):
                           if m.startswith('set') or m.startswith('with') or m.startswith('add')]
         if len(builder_methods) >= 3 and 'build' in details.get('methods', []):
             patterns['Builder'].append(cls_name)
+            
+        # Check if flagged by a decorator
+        if 'builder' in details.get('decorator_patterns', set()):
+            if cls_name not in patterns['Builder']:
+                patterns['Builder'].append(cls_name)
+    
+    # Adapter pattern
+    for cls_name, details in classes.items():
+        # Check for classes that wrap other classes and provide a different interface
+        # Often has 'Adapter' in the name or is used to adapt between interfaces
+        if ('Adapter' in cls_name or 'Wrapper' in cls_name or 
+            any('adapt' in method.lower() for method in details.get('methods', []))):
+            patterns['Adapter'].append(cls_name)
+            
+        # Check if flagged by a decorator
+        if 'adapter' in details.get('decorator_patterns', set()):
+            if cls_name not in patterns['Adapter']:
+                patterns['Adapter'].append(cls_name)
+    
+    # Decorator pattern (not to be confused with Python decorators)
+    for cls_name, details in classes.items():
+        # Decorator pattern typically has a component interface and concrete decorator
+        # that wraps a component and adds functionality
+        if 'Decorator' in cls_name or 'decorator' in details.get('decorator_patterns', set()):
+            patterns['Decorator'].append(cls_name)
+    
+    # Proxy pattern
+    for cls_name, details in classes.items():
+        # Proxy often has 'Proxy' in name and delegates to another object
+        if 'Proxy' in cls_name or 'proxy' in details.get('decorator_patterns', set()):
+            patterns['Proxy'].append(cls_name)
+    
+    # Strategy pattern
+    for cls_name, details in classes.items():
+        # Strategy pattern often involves interchangeable algorithms
+        if ('Strategy' in cls_name or 
+            'strategy' in details.get('decorator_patterns', set()) or
+            any('strategy' in attr.lower() for attr in details.get('attributes', set()))):
+            patterns['Strategy'].append(cls_name)
+    
+    # Command pattern
+    for cls_name, details in classes.items():
+        # Command pattern often has 'execute' method and 'Command' in name
+        if (('Command' in cls_name or 'command' in details.get('decorator_patterns', set())) and
+           ('execute' in details.get('methods', []) or 'run' in details.get('methods', []))):
+            patterns['Command'].append(cls_name)
+    
+    # Context Manager pattern (Python-specific)
+    for cls_name, details in classes.items():
+        # Check for __enter__ and __exit__ methods
+        if '__enter__' in details.get('methods', []) and '__exit__' in details.get('methods', []):
+            patterns['ContextManager'].append(cls_name)
     
     return patterns
 
@@ -710,6 +966,73 @@ def generate_ascii_diagram(classes, modules=None, use_color=True):
                 diagram.append(f"\n{C.YELLOW}{pattern} Pattern:{C.RESET}")
                 for cls in sorted(class_list):
                     diagram.append(f"  {C.BLUE}⚙{C.RESET} {C.GREEN}{cls}{C.RESET}")
+    
+    # Add decorator-based patterns if any were detected
+    decorator_patterns = {}
+    for cls_name, details in classes.items():
+        for pattern in details.get('decorator_patterns', set()):
+            decorator_patterns.setdefault(pattern, []).append(cls_name)
+    
+    if decorator_patterns:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}DECORATOR-BASED PATTERNS:{C.RESET}")
+        diagram.append(f"{C.CYAN}======================={C.RESET}")
+        
+        for pattern, class_list in sorted(decorator_patterns.items()):
+            diagram.append(f"\n{C.YELLOW}{pattern.capitalize()} Pattern (via decorators):{C.RESET}")
+            for cls in sorted(class_list):
+                diagram.append(f"  {C.BLUE}⚙{C.RESET} {C.GREEN}{cls}{C.RESET}")
+    
+    # Add functional programming metrics
+    has_lambdas = any(details.get('lambda_count', 0) > 0 for details in classes.values())
+    has_generators = any(details.get('generator_count', 0) > 0 for details in classes.values())
+    
+    if has_lambdas or has_generators:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}FUNCTIONAL PROGRAMMING METRICS:{C.RESET}")
+        diagram.append(f"{C.CYAN}=============================={C.RESET}")
+        
+        if has_lambdas:
+            diagram.append(f"\n{C.YELLOW}Lambda Expression Usage:{C.RESET}")
+            for cls_name, details in sorted(classes.items()):
+                lambda_count = details.get('lambda_count', 0)
+                if lambda_count > 0:
+                    diagram.append(f"  {C.GREEN}{cls_name}{C.RESET}: {C.MAGENTA}{lambda_count}{C.RESET} lambda expression(s)")
+        
+        if has_generators:
+            diagram.append(f"\n{C.YELLOW}Generator Function Usage:{C.RESET}")
+            for cls_name, details in sorted(classes.items()):
+                generator_count = details.get('generator_count', 0)
+                if generator_count > 0:
+                    diagram.append(f"  {C.GREEN}{cls_name}{C.RESET}: {C.MAGENTA}{generator_count}{C.RESET} generator function(s)")
+    
+    # Add exception flow analysis
+    has_exceptions = any(details.get('raises_exceptions') or details.get('catches_exceptions') 
+                         for details in classes.values())
+    
+    if has_exceptions:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}EXCEPTION FLOW ANALYSIS:{C.RESET}")
+        diagram.append(f"{C.CYAN}======================={C.RESET}")
+        
+        # Exception raised by classes
+        raises = {}
+        for cls_name, details in classes.items():
+            for exc in details.get('raises_exceptions', set()):
+                raises.setdefault(exc, []).append(cls_name)
+        
+        if raises:
+            diagram.append(f"\n{C.YELLOW}Exception Propagation:{C.RESET}")
+            for exc, cls_list in sorted(raises.items()):
+                diagram.append(f"  {C.RED}{exc}{C.RESET} raised by: {C.GREEN}{', '.join(sorted(cls_list))}{C.RESET}")
+        
+        # Exception handling 
+        catches = {}
+        for cls_name, details in classes.items():
+            for exc in details.get('catches_exceptions', set()):
+                catches.setdefault(exc, []).append(cls_name)
+        
+        if catches:
+            diagram.append(f"\n{C.YELLOW}Exception Handling:{C.RESET}")
+            for exc, cls_list in sorted(catches.items()):
+                diagram.append(f"  {C.RED}{exc}{C.RESET} caught by: {C.GREEN}{', '.join(sorted(cls_list))}{C.RESET}")
     
     return "\n".join(diagram)
 
@@ -1215,7 +1538,21 @@ def format_metrics(classes, metrics):
     return "\n".join(lines)
 
 
-def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='png', show_modules=False, use_color=True, calculate_code_metrics=False):
+def analyze_file_worker(args):
+    """Worker function for parallel file analysis."""
+    try:
+        file_path, commit_id, cache = args
+        if file_path.endswith('.py'):
+            return analyze_python_file(file_path, commit_id, cache)
+        return None, None
+    except Exception as e:
+        print(f"Error analyzing file {args[0]}: {str(e)}")
+        return None, None
+
+
+def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='png', show_modules=False, 
+                use_color=True, calculate_code_metrics=False, cache=None, parallel=True, 
+                max_processes=0, max_files_per_process=100, exclude_dirs=None):
     """Analyze a single commit and return a snapshot of the codebase."""
     print(f"Analyzing commit {commit.hexsha[:7]}: {commit.message.strip()}")
     
@@ -1225,20 +1562,76 @@ def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='
     snapshot = {}
     all_modules = {}
     
-    # Analyze Python files
+    # Get list of Python files to analyze
+    python_files = []
     for root, _, files in os.walk(repo.working_dir):
-        for file in files:
-            # Skip files in .git directory and virtual environment directories
-            if '.git' in root or '/env/' in root or '/venv/' in root or 'site-packages' in root:
-                continue
-                
-            file_path = os.path.join(root, file)
+        # Skip files in .git directory and virtual environment directories
+        if '.git' in root or '/env/' in root or '/venv/' in root or 'site-packages' in root:
+            continue
+        
+        # Skip user-specified exclude directories
+        if exclude_dirs and any(exclude_dir in root for exclude_dir in exclude_dirs):
+            continue
             
-            # Only analyze Python files
+        for file in files:
             if file.endswith('.py'):
-                classes, modules = analyze_python_file(file_path)
+                file_path = os.path.join(root, file)
+                python_files.append(file_path)
+    
+    # Analyze Python files - either in parallel or sequentially
+    if parallel and len(python_files) > 1 and mp.cpu_count() > 1:
+        print(f"Analyzing {len(python_files)} files in parallel...")
+        
+        # Determine number of processes to use
+        if max_processes <= 0:
+            num_processes = min(mp.cpu_count(), len(python_files))
+        else:
+            num_processes = min(max_processes, mp.cpu_count(), len(python_files))
+        
+        # Split files into chunks to avoid memory issues with large repositories
+        chunk_size = min(max_files_per_process, max(1, len(python_files) // num_processes))
+        file_chunks = [python_files[i:i + chunk_size] for i in range(0, len(python_files), chunk_size)]
+        
+        print(f"Using {num_processes} processes with max {chunk_size} files per process")
+        print(f"Processing {len(file_chunks)} chunks of files")
+        
+        try:
+            # Use a process pool to analyze file chunks in parallel
+            with mp.Pool(processes=num_processes) as pool:
+                for chunk in file_chunks:
+                    # Prepare arguments for worker function
+                    worker_args = [(file_path, commit.hexsha, cache) for file_path in chunk]
+                    
+                    # Process this chunk of files
+                    results = pool.map(analyze_file_worker, worker_args)
+                    
+                    # Combine results from this chunk
+                    for result in results:
+                        if result:
+                            classes, modules = result
+                            snapshot.update(classes)
+                            all_modules.update(modules)
+        except Exception as e:
+            print(f"Error in parallel processing: {str(e)}")
+            print("Falling back to sequential processing...")
+            # Fall back to sequential processing
+            for file_path in python_files:
+                try:
+                    classes, modules = analyze_python_file(file_path, commit.hexsha, cache)
+                    snapshot.update(classes)
+                    all_modules.update(modules)
+                except Exception as file_e:
+                    print(f"Error analyzing {file_path}: {str(file_e)}")
+    else:
+        # Sequential processing
+        print(f"Processing {len(python_files)} files sequentially...")
+        for file_path in python_files:
+            try:
+                classes, modules = analyze_python_file(file_path, commit.hexsha, cache)
                 snapshot.update(classes)
                 all_modules.update(modules)
+            except Exception as e:
+                print(f"Error analyzing {file_path}: {str(e)}")
     
     # Generate and save ASCII diagram
     diagram = generate_ascii_diagram(snapshot, all_modules if show_modules else None, use_color)
@@ -1276,6 +1669,208 @@ def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='
     return snapshot
 
 
+def generate_html_report(snapshots, commits, output_dir):
+    """Generate an interactive HTML report with class diagrams and metrics."""
+    # Create HTML report file
+    report_file = os.path.join(output_dir, "class_analysis_report.html")
+    
+    # Basic HTML structure with CSS and JavaScript
+    html_header = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Architecture Analysis Report</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2c3e50; color: white; padding: 1em; text-align: center; }
+        .commit-nav { display: flex; overflow-x: auto; margin-bottom: 20px; background-color: #f5f5f5; padding: 10px; }
+        .commit-btn { min-width: 120px; margin-right: 10px; padding: 8px 15px; background-color: #3498db; 
+                     color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; }
+        .commit-btn:hover { background-color: #2980b9; }
+        .commit-btn.active { background-color: #2c3e50; }
+        .commit-section { display: none; margin-top: 20px; }
+        .commit-section.active { display: block; }
+        .diagram { background-color: #f8f9fa; padding: 20px; margin-bottom: 20px; border-radius: 5px; overflow-x: auto; }
+        .metrics { background-color: #f8f9fa; padding: 20px; border-radius: 5px; }
+        pre { white-space: pre-wrap; font-family: 'Courier New', Courier, monospace; }
+        .class-node { fill: #3498db; stroke: #2980b9; }
+        .tab-container { display: flex; margin-bottom: 10px; }
+        .tab { padding: 10px 20px; background-color: #f0f0f0; border: none; cursor: pointer; border-radius: 5px 5px 0 0; }
+        .tab.active { background-color: #3498db; color: white; }
+        .tab-content { display: none; padding: 20px; background-color: #f8f9fa; border-radius: 0 5px 5px 5px; }
+        .tab-content.active { display: block; }
+        .summary { margin-bottom: 20px; }
+        .relationship-graph svg { max-width: 100%; height: auto; }
+        .diff-section { margin-top: 30px; border-top: 1px solid #ddd; padding-top: 20px; }
+        .added { color: green; font-weight: bold; }
+        .removed { color: red; text-decoration: line-through; }
+        .modified { color: orange; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Code Architecture Analysis Report</h1>
+        <p>Generated on """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """</p>
+    </div>
+    <div class="container">
+        <div class="summary">
+            <h2>Repository Summary</h2>
+            <p>Total commits analyzed: """ + str(len(commits)) + """</p>
+            <p>Date range: """ + commits[0].committed_datetime.strftime("%Y-%m-%d") + """ to """ + commits[-1].committed_datetime.strftime("%Y-%m-%d") + """</p>
+        </div>
+        
+        <h2>Commit Navigation</h2>
+        <div class="commit-nav">
+"""
+    
+    # Add commit navigation buttons
+    for i, commit in enumerate(commits):
+        active = " active" if i == 0 else ""
+        short_msg = commit.message.strip().split('\n')[0][:50]
+        html_header += f'            <button class="commit-btn{active}" onclick="showCommit({i})">{commit.hexsha[:7]} - {short_msg}</button>\n'
+    
+    html_header += """        </div>
+        
+        <div id="commit-sections">
+"""
+    
+    # Add each commit section
+    commit_sections = ""
+    for i, commit in enumerate(commits):
+        snapshot = snapshots[commit.hexsha]
+        active = " active" if i == 0 else ""
+        
+        # Create commit section with tabs for different views
+        section = f"""
+        <div id="commit-{i}" class="commit-section{active}">
+            <h2>Commit: {commit.hexsha[:7]}</h2>
+            <p><strong>Author:</strong> {commit.author.name} ({commit.author.email})<br>
+            <strong>Date:</strong> {commit.committed_datetime.strftime("%Y-%m-%d %H:%M:%S")}<br>
+            <strong>Message:</strong> {commit.message.strip()}</p>
+            
+            <div class="tab-container">
+                <button class="tab active" onclick="showTab('diagram-{i}', this)">Class Diagram</button>
+                <button class="tab" onclick="showTab('structure-{i}', this)">Class Structure</button>
+                <button class="tab" onclick="showTab('metrics-{i}', this)">Metrics</button>
+            </div>
+            
+            <div id="diagram-{i}" class="tab-content active">
+                <div class="diagram">
+                    <h3>Class Diagram</h3>
+                    <p>This diagram shows the relationships between classes.</p>
+                    <div class="ascii-diagram">
+                        <pre>{generate_ascii_diagram(snapshot, None, False)}</pre>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="structure-{i}" class="tab-content">
+                <div class="class-structure">
+                    <h3>Class Structure</h3>
+                    <p>Detailed structure of each class in this commit.</p>
+"""
+        
+        # Add details for each class
+        for cls_name, details in sorted(snapshot.items()):
+            section += f"""
+                    <div class="class-box">
+                        <h4>{cls_name}</h4>
+                        <p><strong>Methods:</strong> {', '.join(details['methods']) or 'None'}</p>
+                        <p><strong>States:</strong> {', '.join(details['states']) or 'None'}</p>
+                        <p><strong>Props:</strong> {', '.join(details['props']) or 'None'}</p>
+                        <p><strong>Serializers:</strong> {', '.join(details['serializers']) or 'None'}</p>
+                        <p><strong>Parent Classes:</strong> {', '.join(details.get('parent_classes', [])) or 'None'}</p>
+                    </div>
+"""
+        
+        section += """
+                </div>
+            </div>
+            
+            <div id="metrics-{i}" class="tab-content">
+                <div class="metrics">
+                    <h3>Code Metrics</h3>
+                    <p>Metrics for evaluating code quality and architecture.</p>
+                    <pre>""" + format_metrics(snapshot, calculate_metrics(snapshot)) + """</pre>
+                </div>
+            </div>
+"""
+        
+        # Add diff section if not the first commit
+        if i > 0:
+            prev_commit = commits[i-1]
+            diff = diff_snapshots(snapshots[prev_commit.hexsha], snapshot)
+            
+            section += f"""
+            <div class="diff-section">
+                <h3>Changes from Previous Commit</h3>
+                <p>This shows what changed since commit {prev_commit.hexsha[:7]}</p>
+                <pre>{format_diff(diff, prev_commit.hexsha, commit.hexsha)}</pre>
+            </div>
+"""
+        
+        section += """        </div>
+"""
+        commit_sections += section
+    
+    # JavaScript for interactivity
+    javascript = """
+        </div>
+    </div>
+    
+    <script>
+        function showCommit(index) {
+            // Hide all commit sections
+            document.querySelectorAll('.commit-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            // Show selected commit section
+            document.getElementById(`commit-${index}`).classList.add('active');
+            
+            // Update button active state
+            document.querySelectorAll('.commit-btn').forEach((btn, i) => {
+                if (i === index) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+        
+        function showTab(tabId, button) {
+            // Get the parent commit section
+            const commitSection = button.closest('.commit-section');
+            
+            // Hide all tab contents in this commit section
+            commitSection.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Show the selected tab content
+            document.getElementById(tabId).classList.add('active');
+            
+            // Update tab button active state
+            commitSection.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            button.classList.add('active');
+        }
+    </script>
+</body>
+</html>
+"""
+    
+    # Write the HTML report
+    with open(report_file, 'w', encoding='utf-8') as f:
+        f.write(html_header + commit_sections + javascript)
+    
+    print(f"HTML report generated: {report_file}")
+    return report_file
+
+
 def main():
     """Main function to process the repository."""
     parser = argparse.ArgumentParser(description='Generate class diagrams and communication maps from Git commits')
@@ -1288,6 +1883,13 @@ def main():
     parser.add_argument('--show-modules', '-m', action='store_true', help='Show module dependencies in diagrams')
     parser.add_argument('--no-color', action='store_true', help='Disable colored ASCII output')
     parser.add_argument('--metrics', action='store_true', help='Calculate and output code quality metrics')
+    parser.add_argument('--no-cache', action='store_true', help='Disable caching of file analysis results')
+    parser.add_argument('--cache-dir', default='.analysis_cache', help='Directory for storing analysis cache')
+    parser.add_argument('--no-parallel', action='store_true', help='Disable parallel processing of files')
+    parser.add_argument('--max-processes', type=int, default=0, help='Maximum number of parallel processes (0 = auto)')
+    parser.add_argument('--max-files-per-process', type=int, default=100, help='Maximum number of files per process to avoid memory issues')
+    parser.add_argument('--generate-html', action='store_true', help='Generate HTML report with interactive diagrams')
+    parser.add_argument('--exclude-dirs', nargs='+', default=[], help='Additional directories to exclude from analysis')
     args = parser.parse_args()
     
     repo_path = args.repo_path
@@ -1314,6 +1916,12 @@ def main():
         print(f"Error retrieving commits: {e}")
         return 1
     
+    # Initialize analysis cache if enabled
+    cache = None
+    if not args.no_cache:
+        print(f"Initializing analysis cache in {args.cache_dir}")
+        cache = AnalysisCache(args.cache_dir)
+    
     # Save the original branch/commit to return to
     original_branch = repo.active_branch.name
     
@@ -1322,7 +1930,21 @@ def main():
         
         # Process each commit
         for commit in commits:
-            snapshot = analyze_commit(repo, commit, output_dir, args.ascii_only, args.format, args.show_modules, not args.no_color, args.metrics)
+            snapshot = analyze_commit(
+                repo, 
+                commit, 
+                output_dir, 
+                args.ascii_only, 
+                args.format, 
+                args.show_modules, 
+                not args.no_color, 
+                args.metrics,
+                cache,
+                not args.no_parallel,
+                args.max_processes,
+                args.max_files_per_process,
+                args.exclude_dirs
+            )
             snapshots[commit.hexsha] = snapshot
         
         # Generate diffs between consecutive commits
@@ -1336,6 +1958,16 @@ def main():
             diff_file = os.path.join(output_dir, f"diff_{old_commit.hexsha[:7]}_{new_commit.hexsha[:7]}.txt")
             with open(diff_file, 'w', encoding='utf-8') as f:
                 f.write(diff_text)
+        
+        # Generate HTML report if requested
+        if args.generate_html:
+            print("Generating HTML report...")
+            generate_html_report(snapshots, commits, output_dir)
+        
+        # Save cache if used
+        if cache:
+            cache.save_cache()
+            print(f"Analysis cache saved to {args.cache_dir}")
         
         # Return to the original branch
         repo.git.checkout(original_branch)
