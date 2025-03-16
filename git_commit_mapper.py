@@ -14,6 +14,33 @@ import argparse
 from git import Repo, GitCommandError
 from collections import defaultdict
 import re
+import graphviz
+
+# ANSI color codes for terminal output
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    
+    # Foreground colors
+    BLACK = '\033[30m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    
+    # Background colors
+    BG_BLACK = '\033[40m'
+    BG_RED = '\033[41m'
+    BG_GREEN = '\033[42m'
+    BG_YELLOW = '\033[43m'
+    BG_BLUE = '\033[44m'
+    BG_MAGENTA = '\033[45m'
+    BG_CYAN = '\033[46m'
+    BG_WHITE = '\033[47m'
 
 class CodeAnalyzer(ast.NodeVisitor):
     """Analyzes Python code to extract classes and their communications."""
@@ -339,10 +366,22 @@ def detect_design_patterns(classes):
     return patterns
 
 
-def generate_ascii_diagram(classes, modules=None):
+def generate_ascii_diagram(classes, modules=None, use_color=True):
     """Generate a comprehensive ASCII diagram showing class relationships."""
     if not classes:
         return "No classes found."
+    
+    # Initialize color settings
+    if use_color:
+        C = Colors
+    else:
+        # Create a dummy Colors class with empty strings
+        class DummyColors:
+            pass
+        C = DummyColors()
+        for attr in dir(Colors):
+            if not attr.startswith('__'):
+                setattr(C, attr, '')
     
     diagram = []
     method_map = defaultdict(list)
@@ -435,23 +474,23 @@ def generate_ascii_diagram(classes, modules=None):
             ))
     
     # Create class boxes with inheritance
-    diagram.append("CLASS STRUCTURE:")
-    diagram.append("================")
+    diagram.append(f"{C.BOLD}{C.CYAN}CLASS STRUCTURE:{C.RESET}")
+    diagram.append(f"{C.CYAN}================={C.RESET}")
     for cls_name, details in classes.items():
         # Class header with inheritance
         parents = details['parent_classes']
-        class_header = f"╭─ {cls_name}"
+        class_header = f"{C.BLUE}╭─ {C.BOLD}{cls_name}{C.RESET}"
         if parents:
-            class_header += f" ({' ← '.join(parents)})"
-        class_header += " ────────────────────╮"
+            class_header += f"{C.BLUE} ({C.MAGENTA}" + f"{C.RESET}{C.MAGENTA} ← {C.RESET}{C.MAGENTA}".join(parents) + f"{C.RESET}{C.BLUE}){C.RESET}"
+        class_header += f"{C.BLUE} ────────────────────╮{C.RESET}"
         diagram.append(class_header)
         
         # Body content
         body = [
-            f"│ {'Methods:':<16} {', '.join(details['methods']) or 'None'}",
-            f"│ {'States:':<16} {', '.join(details['states']) or 'None'}",
-            f"│ {'Props:':<16} {', '.join(details['props']) or 'None'}",
-            f"│ {'Serializers:':<16} {', '.join(details['serializers']) or 'None'}"
+            f"{C.BLUE}│{C.RESET} {C.GREEN}{'Methods:':<16}{C.RESET} {', '.join(details['methods']) or 'None'}",
+            f"{C.BLUE}│{C.RESET} {C.YELLOW}{'States:':<16}{C.RESET} {', '.join(details['states']) or 'None'}",
+            f"{C.BLUE}│{C.RESET} {C.YELLOW}{'Props:':<16}{C.RESET} {', '.join(details['props']) or 'None'}",
+            f"{C.BLUE}│{C.RESET} {C.CYAN}{'Serializers:':<16}{C.RESET} {', '.join(details['serializers']) or 'None'}"
         ]
         
         # Find connections
@@ -510,84 +549,84 @@ def generate_ascii_diagram(classes, modules=None):
                 ))
 
         diagram.extend(body)
-        diagram.append("╰───────────────────────────────────────────────╯")
+        diagram.append(f"{C.BLUE}╰───────────────────────────────────────────────╯{C.RESET}")
         diagram.append("")
 
     # Add communication map
-    diagram.append("\nCLASS COMMUNICATIONS:")
-    diagram.append("=====================")
+    diagram.append(f"\n{C.BOLD}{C.CYAN}CLASS COMMUNICATIONS:{C.RESET}")
+    diagram.append(f"{C.CYAN}====================={C.RESET}")
     
     # Method calls between classes
     method_connections = [c for c in connections if c[3] == "method"]
     if method_connections:
-        diagram.append("\nMethod Calls:")
+        diagram.append(f"\n{C.YELLOW}Method Calls:{C.RESET}")
         for src, dest, label, _ in sorted(method_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ───[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}───[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # API calls
     api_connections = [c for c in connections if c[3] == "api"]
     if api_connections:
-        diagram.append("\nAPI Communications:")
+        diagram.append(f"\n{C.YELLOW}API Communications:{C.RESET}")
         for src, _, label, _ in sorted(api_connections, key=lambda x: x[0]):
-            diagram.append(f"  {src.ljust(15)} ──{label}──→ External API")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.RED}──{label}──→{C.RESET} {C.BOLD}External API{C.RESET}")
 
     # Serializer relationships
     if serializer_connections:
-        diagram.append("\nSerializer Usage:")
+        diagram.append(f"\n{C.YELLOW}Serializer Usage:{C.RESET}")
         for src, dest, label, _ in sorted(serializer_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.CYAN}──[{label}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
 
     # Add composition relationships
     if composition_connections:
-        diagram.append("\nComposition Relationships:")
+        diagram.append(f"\n{C.YELLOW}Composition Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(composition_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ◆──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}◆──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add parameter type relationships
     if parameter_connections:
-        diagram.append("\nParameter Type Relationships:")
+        diagram.append(f"\n{C.YELLOW}Parameter Type Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(parameter_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ○──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}○──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add return type relationships
     if return_connections:
-        diagram.append("\nReturn Type Relationships:")
+        diagram.append(f"\n{C.YELLOW}Return Type Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(return_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ●──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}●──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add class instantiation relationships
     if instantiation_connections:
-        diagram.append("\nClass Instantiation Relationships:")
+        diagram.append(f"\n{C.YELLOW}Class Instantiation Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(instantiation_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ⬢──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}⬢──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add implementation relationships
     if implementation_connections:
-        diagram.append("\nInterface Implementation Relationships:")
+        diagram.append(f"\n{C.YELLOW}Interface Implementation Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(implementation_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ⊳──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}⊳──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add factory relationships
     if factory_connections:
-        diagram.append("\nFactory Method Relationships:")
+        diagram.append(f"\n{C.YELLOW}Factory Method Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(factory_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ⊕──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}⊕──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add dependency injection relationships
     if di_connections:
-        diagram.append("\nDependency Injection Relationships:")
+        diagram.append(f"\n{C.YELLOW}Dependency Injection Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(di_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ⊖──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}⊖──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Add event relationships
     if event_connections:
-        diagram.append("\nEvent/Observer Relationships:")
+        diagram.append(f"\n{C.YELLOW}Event/Observer Relationships:{C.RESET}")
         for src, dest, label, _ in sorted(event_connections, key=lambda x: (x[0], x[1])):
-            diagram.append(f"  {src.ljust(15)} ⚡──[{label}]──→ {dest}")
+            diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}⚡──[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
     
     # Enhanced inheritance hierarchy visualization
-    diagram.append("\nINHERITANCE HIERARCHY:")
-    diagram.append("=====================")
+    diagram.append(f"\n{C.BOLD}{C.CYAN}INHERITANCE HIERARCHY:{C.RESET}")
+    diagram.append(f"{C.CYAN}====================={C.RESET}")
     
     # Build inheritance tree
     root_classes = []
@@ -604,7 +643,7 @@ def generate_ascii_diagram(classes, modules=None):
     # Draw inheritance tree
     def draw_inheritance(class_name, prefix="", is_last=True):
         connector = "└── " if is_last else "├── "
-        diagram.append(f"{prefix}{connector}{class_name}")
+        diagram.append(f"{C.BLUE}{prefix}{connector}{C.RESET}{C.MAGENTA}{class_name}{C.RESET}")
         
         children = sorted(inheritance_map.get(class_name, []))
         prefix_extension = "    " if is_last else "│   "
@@ -626,8 +665,8 @@ def generate_ascii_diagram(classes, modules=None):
         )
         
         if all_connections:
-            diagram.append("\nFULL CLASS RELATIONSHIP GRAPH:")
-            diagram.append("============================")
+            diagram.append(f"\n{C.BOLD}{C.CYAN}FULL CLASS RELATIONSHIP GRAPH:{C.RESET}")
+            diagram.append(f"{C.CYAN}============================{C.RESET}")
             diagram.append("")
             
             # Build detailed relationship graph
@@ -642,43 +681,51 @@ def generate_ascii_diagram(classes, modules=None):
                     continue
                 
                 # Create a relationship-oriented graph
-                draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, "", True)
+                draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, "", True, C)
     
-    # Add this after the class relationships
+    # Add module relationships if modules are provided
     if modules:
-        diagram.append("\nMODULE DEPENDENCIES:")
-        diagram.append("===================")
+        diagram.append(f"\n{C.BOLD}{C.CYAN}MODULE DEPENDENCIES:{C.RESET}")
+        diagram.append(f"{C.CYAN}==================={C.RESET}")
         
         for module_name, details in sorted(modules.items()):
             if details['imported_modules']:
-                diagram.append(f"\n{module_name} imports:")
+                diagram.append(f"\n{C.GREEN}{module_name}{C.RESET} {C.YELLOW}imports:{C.RESET}")
                 for imported in sorted(details['imported_modules']):
-                    diagram.append(f"  └─→ {imported}")
+                    diagram.append(f"  {C.BLUE}└─→{C.RESET} {C.MAGENTA}{imported}{C.RESET}")
             
             if 'classes' in details and details['classes']:
-                diagram.append(f"\n{module_name} defines classes:")
+                diagram.append(f"\n{C.GREEN}{module_name}{C.RESET} {C.YELLOW}defines classes:{C.RESET}")
                 for cls in sorted(details['classes']):
-                    diagram.append(f"  └─→ {cls}")
+                    diagram.append(f"  {C.BLUE}└─→{C.RESET} {C.MAGENTA}{cls}{C.RESET}")
     
     # Add design pattern detection
     patterns = detect_design_patterns(classes)
     if any(patterns.values()):
-        diagram.append("\nDETECTED DESIGN PATTERNS:")
-        diagram.append("=======================")
+        diagram.append(f"\n{C.BOLD}{C.CYAN}DETECTED DESIGN PATTERNS:{C.RESET}")
+        diagram.append(f"{C.CYAN}======================={C.RESET}")
         
         for pattern, class_list in patterns.items():
             if class_list:
-                diagram.append(f"\n{pattern} Pattern:")
+                diagram.append(f"\n{C.YELLOW}{pattern} Pattern:{C.RESET}")
                 for cls in sorted(class_list):
-                    diagram.append(f"  ⚙ {cls}")
+                    diagram.append(f"  {C.BLUE}⚙{C.RESET} {C.GREEN}{cls}{C.RESET}")
     
     return "\n".join(diagram)
 
-def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True):
+def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True, C=None):
     """Helper function to draw a comprehensive relationship graph."""
+    if not C:
+        class DummyColors:
+            pass
+        C = DummyColors()
+        for attr in dir(Colors):
+            if not attr.startswith('__'):
+                setattr(C, attr, '')
+    
     if cls_name in drawn_classes:
         branch = "└── " if is_last else "├── "
-        diagram.append(f"{prefix}{branch}{cls_name} (reference)")
+        diagram.append(f"{C.BLUE}{prefix}{branch}{C.RESET}{C.MAGENTA}{cls_name}{C.RESET} {C.YELLOW}(reference){C.RESET}")
         return
     
     # Mark this class as drawn
@@ -686,7 +733,7 @@ def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", 
     
     # Draw the current class
     branch = "└── " if is_last else "├── "
-    diagram.append(f"{prefix}{branch}{cls_name}")
+    diagram.append(f"{C.BLUE}{prefix}{branch}{C.RESET}{C.BOLD}{C.GREEN}{cls_name}{C.RESET}")
     
     # Calculate new prefix for relationships
     new_prefix = prefix + ("    " if is_last else "│   ")
@@ -701,12 +748,12 @@ def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", 
         is_last_rel = (i == len(relationships) - 1)
         rel_branch = "└── " if is_last_rel else "├── "
         rel_types_str = ", ".join(sorted(rel_types))
-        diagram.append(f"{new_prefix}{rel_branch}→ {target} [{rel_types_str}]")
+        diagram.append(f"{C.BLUE}{new_prefix}{rel_branch}→{C.RESET} {C.MAGENTA}{target}{C.RESET} {C.YELLOW}[{rel_types_str}]{C.RESET}")
         
         # Recursively draw the target's relationships if not already drawn
         if target not in drawn_classes:
             target_prefix = new_prefix + ("    " if is_last_rel else "│   ")
-            draw_relationship_graph(diagram, target, graph, drawn_classes, target_prefix, True)
+            draw_relationship_graph(diagram, target, graph, drawn_classes, target_prefix, True, C)
 
 
 def diff_snapshots(old_snapshot, new_snapshot):
@@ -949,7 +996,226 @@ def format_diff(diff, old_commit_id, new_commit_id):
     return "\n".join(lines)
 
 
-def analyze_commit(repo, commit, output_dir):
+def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
+    """Generate a GraphViz diagram showing class relationships."""
+    # Create a new directed graph
+    dot = graphviz.Digraph(
+        comment='Class Diagram', 
+        format=format,
+        node_attr={'shape': 'box', 'style': 'rounded,filled', 'fillcolor': 'lightblue'}
+    )
+    
+    # Add classes as nodes
+    for cls_name, details in classes.items():
+        # Create label with class details
+        label = f"{cls_name}\\n--------------------\\n"
+        
+        # Add methods
+        if details['methods']:
+            label += "\\nMethods:\\n" + "\\n".join(details['methods'][:5])
+            if len(details['methods']) > 5:
+                label += f"\\n... ({len(details['methods']) - 5} more)"
+        
+        # Add states if available
+        if details['states']:
+            label += "\\n\\nStates:\\n" + "\\n".join(list(details['states'])[:3])
+            if len(details['states']) > 3:
+                label += f"\\n... ({len(details['states']) - 3} more)"
+        
+        dot.node(cls_name, label=label)
+    
+    # Add inheritance relationships
+    for cls_name, details in classes.items():
+        for parent in details.get('parent_classes', []):
+            if parent in classes:  # Only add edges to classes that exist in our snapshot
+                dot.edge(parent, cls_name, arrowhead='empty', style='solid', color='blue')
+    
+    # Add composition relationships
+    for cls_name, details in classes.items():
+        for composed in details.get('composed_classes', set()):
+            if composed in classes:
+                dot.edge(cls_name, composed, arrowhead='diamond', style='solid', color='darkgreen')
+    
+    # Add method call relationships
+    for cls_name, details in classes.items():
+        for called in details['calls']:
+            for target_cls in classes:
+                if cls_name == target_cls:
+                    continue
+                
+                # Check if the call directly targets another class (ClassName.method)
+                if called.startswith(target_cls + '.'):
+                    dot.edge(cls_name, target_cls, style='dashed', color='red')
+                    break
+                
+                # Check if the call matches another class's method
+                if called in classes[target_cls]['methods']:
+                    dot.edge(cls_name, target_cls, style='dashed', color='red')
+                    break
+    
+    # Add parameter type relationships
+    for cls_name, details in classes.items():
+        for param_cls in details.get('param_classes', set()):
+            if param_cls in classes:
+                dot.edge(cls_name, param_cls, style='dotted', color='purple')
+    
+    # Add factory relationships
+    for cls_name, details in classes.items():
+        for factory_method, target_cls in details.get('factory_methods', {}).items():
+            if target_cls in classes:
+                dot.edge(cls_name, target_cls, label=f"creates via {factory_method}", style='dashed', color='orange')
+    
+    # Add dependency injection relationships
+    for cls_name, details in classes.items():
+        for dependency in details.get('injected_dependencies', set()):
+            if dependency in classes:
+                dot.edge(cls_name, dependency, style='dotted', color='blue')
+    
+    # Create a subgraph for design patterns if any
+    patterns = detect_design_patterns(classes)
+    if any(patterns.values()):
+        with dot.subgraph(name='cluster_patterns') as c:
+            c.attr(style='filled', color='lightgrey', label='Design Patterns')
+            
+            for pattern, cls_list in patterns.items():
+                for cls in cls_list:
+                    if cls in classes:
+                        pattern_node = f"{cls}_pattern"
+                        c.node(pattern_node, label=f"{pattern} Pattern", shape='hexagon', style='filled', fillcolor='yellow')
+                        c.edge(pattern_node, cls, style='dotted', dir='none')
+    
+    # Add module relationships if modules are provided
+    if modules:
+        with dot.subgraph(name='cluster_modules') as c:
+            c.attr(style='filled', color='lightgrey', label='Module Dependencies')
+            
+            for module_name, details in modules.items():
+                c.node(f"module_{module_name}", label=module_name, shape='folder', style='filled', fillcolor='lightyellow')
+                
+                # Add edges for module imports
+                for imported in details.get('imported_modules', []):
+                    imported_node = f"module_{imported}"
+                    if imported_node in [f"module_{m}" for m in modules]:
+                        c.edge(f"module_{module_name}", imported_node, style='dotted')
+                
+                # Connect modules to classes they define
+                for cls in details.get('classes', []):
+                    if cls in classes:
+                        # Use invisible edges to keep related classes close together
+                        dot.edge(f"module_{module_name}", cls, style='dotted', constraint='false', color='gray')
+    
+    # Save the diagram
+    dot.render(output_file, cleanup=True)
+    return f"{output_file}.{format}"
+
+
+def calculate_metrics(classes):
+    """Calculate code quality metrics for each class."""
+    metrics = {}
+    
+    # Calculate class metrics for each class
+    for cls_name, details in classes.items():
+        cls_metrics = {}
+        
+        # Calculate class size metrics
+        cls_metrics['num_methods'] = len(details['methods'])
+        cls_metrics['num_attributes'] = len(details['attributes'])
+        cls_metrics['num_states'] = len(details['states'])
+        cls_metrics['num_props'] = len(details['props'])
+        
+        # Calculate coupling metrics
+        # Efferent coupling (CE): number of classes this class depends on
+        efferent_coupling = len(set(details.get('composed_classes', set())) | 
+                               set(details.get('param_classes', set())) | 
+                               set(details.get('injected_dependencies', set())))
+        cls_metrics['efferent_coupling'] = efferent_coupling
+        
+        # Afferent coupling (CA): number of classes that depend on this class
+        afferent_coupling = 0
+        for other_cls, other_details in classes.items():
+            if other_cls == cls_name:
+                continue
+            if (cls_name in other_details.get('composed_classes', set()) or
+                cls_name in other_details.get('param_classes', set()) or
+                cls_name in other_details.get('injected_dependencies', set())):
+                afferent_coupling += 1
+        cls_metrics['afferent_coupling'] = afferent_coupling
+        
+        # Calculate instability: I = CE / (CE + CA)
+        # Ranges from 0 to 1. 0 = maximally stable, 1 = maximally unstable
+        total_coupling = efferent_coupling + afferent_coupling
+        instability = efferent_coupling / total_coupling if total_coupling > 0 else 0
+        cls_metrics['instability'] = round(instability, 2)
+        
+        # Calculate abstraction level: number of abstract methods / total methods
+        abstract_methods = len(details.get('abstract_methods', set()))
+        abstraction = abstract_methods / cls_metrics['num_methods'] if cls_metrics['num_methods'] > 0 else 0
+        cls_metrics['abstraction'] = round(abstraction, 2)
+        
+        # Calculate inheritance depth
+        inheritance_depth = 0
+        current_parents = details.get('parent_classes', [])
+        while current_parents:
+            inheritance_depth += 1
+            next_parents = []
+            for parent in current_parents:
+                if parent in classes:
+                    next_parents.extend(classes[parent].get('parent_classes', []))
+            current_parents = next_parents
+        cls_metrics['inheritance_depth'] = inheritance_depth
+        
+        # Add metrics to the result dictionary
+        metrics[cls_name] = cls_metrics
+    
+    return metrics
+
+
+def format_metrics(classes, metrics):
+    """Format code metrics into a readable string."""
+    if not metrics:
+        return "No metrics calculated."
+    
+    lines = []
+    lines.append("CODE QUALITY METRICS:")
+    lines.append("=====================")
+    lines.append("")
+    
+    for cls_name, cls_metrics in sorted(metrics.items()):
+        lines.append(f"Class: {cls_name}")
+        lines.append("-" * (len(cls_name) + 7))
+        
+        # Size metrics
+        lines.append(f"Size: {cls_metrics['num_methods']} methods, {cls_metrics['num_attributes']} attributes")
+        
+        # Coupling metrics
+        lines.append(f"Efferent Coupling (CE): {cls_metrics['efferent_coupling']} (outgoing dependencies)")
+        lines.append(f"Afferent Coupling (CA): {cls_metrics['afferent_coupling']} (incoming dependencies)")
+        lines.append(f"Instability (I = CE/(CE+CA)): {cls_metrics['instability']:.2f} (0=stable, 1=unstable)")
+        
+        # Inheritance metrics
+        lines.append(f"Inheritance Depth: {cls_metrics['inheritance_depth']}")
+        lines.append(f"Abstraction: {cls_metrics['abstraction']:.2f}")
+        
+        # Warnings
+        warnings = []
+        if cls_metrics['num_methods'] > 20:
+            warnings.append("Class has too many methods (> 20)")
+        if cls_metrics['efferent_coupling'] > 5:
+            warnings.append("High efferent coupling (> 5)")
+        if cls_metrics['inheritance_depth'] > 3:
+            warnings.append("Deep inheritance hierarchy (> 3)")
+        
+        if warnings:
+            lines.append("\nWarnings:")
+            for warning in warnings:
+                lines.append(f"  - {warning}")
+        
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='png', show_modules=False, use_color=True, calculate_code_metrics=False):
     """Analyze a single commit and return a snapshot of the codebase."""
     print(f"Analyzing commit {commit.hexsha[:7]}: {commit.message.strip()}")
     
@@ -975,7 +1241,7 @@ def analyze_commit(repo, commit, output_dir):
                 all_modules.update(modules)
     
     # Generate and save ASCII diagram
-    diagram = generate_ascii_diagram(snapshot, all_modules)
+    diagram = generate_ascii_diagram(snapshot, all_modules if show_modules else None, use_color)
     diagram_file = os.path.join(output_dir, f"diagram_{commit.hexsha[:7]}.txt")
     
     with open(diagram_file, 'w', encoding='utf-8') as f:
@@ -984,6 +1250,28 @@ def analyze_commit(repo, commit, output_dir):
         f.write(f"Author: {commit.author.name} <{commit.author.email}>\n")
         f.write(f"Message: {commit.message.strip()}\n\n")
         f.write(diagram)
+    
+    # Calculate and save code metrics if requested
+    if calculate_code_metrics:
+        metrics = calculate_metrics(snapshot)
+        metrics_formatted = format_metrics(snapshot, metrics)
+        metrics_file = os.path.join(output_dir, f"metrics_{commit.hexsha[:7]}.txt")
+        
+        with open(metrics_file, 'w', encoding='utf-8') as f:
+            f.write(f"Code Metrics for Commit: {commit.hexsha}\n")
+            f.write(f"Date: {commit.committed_datetime}\n")
+            f.write(f"Author: {commit.author.name} <{commit.author.email}>\n")
+            f.write(f"Message: {commit.message.strip()}\n\n")
+            f.write(metrics_formatted)
+    
+    # Generate and save GraphViz diagram
+    if not ascii_only:
+        graphviz_file = os.path.join(output_dir, f"diagram_{commit.hexsha[:7]}")
+        try:
+            generate_graphviz_diagram(snapshot, graphviz_file, all_modules if show_modules else None, graphviz_format)
+            print(f"GraphViz diagram saved to {graphviz_file}.{graphviz_format}")
+        except Exception as e:
+            print(f"Error generating GraphViz diagram: {str(e)}")
     
     return snapshot
 
@@ -995,6 +1283,11 @@ def main():
     parser.add_argument('--output-dir', '-o', default='diagrams', help='Output directory for diagrams and diffs')
     parser.add_argument('--max-commits', '-n', type=int, default=10, help='Maximum number of commits to analyze')
     parser.add_argument('--skip-env', '-s', action='store_true', help='Skip virtual environment directories')
+    parser.add_argument('--ascii-only', '-a', action='store_true', help='Generate only ASCII diagrams (no GraphViz)')
+    parser.add_argument('--format', '-f', choices=['png', 'svg', 'pdf'], default='png', help='Output format for GraphViz diagrams')
+    parser.add_argument('--show-modules', '-m', action='store_true', help='Show module dependencies in diagrams')
+    parser.add_argument('--no-color', action='store_true', help='Disable colored ASCII output')
+    parser.add_argument('--metrics', action='store_true', help='Calculate and output code quality metrics')
     args = parser.parse_args()
     
     repo_path = args.repo_path
@@ -1029,7 +1322,7 @@ def main():
         
         # Process each commit
         for commit in commits:
-            snapshot = analyze_commit(repo, commit, output_dir)
+            snapshot = analyze_commit(repo, commit, output_dir, args.ascii_only, args.format, args.show_modules, not args.no_color, args.metrics)
             snapshots[commit.hexsha] = snapshot
         
         # Generate diffs between consecutive commits
