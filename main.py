@@ -28,6 +28,9 @@ def main():
     parser.add_argument('--max-files-per-process', type=int, default=100, help='Maximum number of files per process')
     parser.add_argument('--generate-html', action='store_true', help='Generate HTML report with interactive diagrams')
     parser.add_argument('--exclude-dirs', nargs='+', default=[], help='Additional directories to exclude from analysis')
+    parser.add_argument('--inheritance-only', action='store_true', help='Show only inheritance relationships')
+    parser.add_argument('--relationship-only', action='store_true', help='Show only class relationships')
+    parser.add_argument('--detailed', '-d', action='store_true', help='Show detailed class information')
     args = parser.parse_args()
 
     # Ensure output directory exists
@@ -47,7 +50,10 @@ def main():
         parallel=not args.no_parallel,
         max_processes=args.max_processes,
         max_files_per_process=args.max_files_per_process,
-        exclude_dirs=args.exclude_dirs
+        exclude_dirs=args.exclude_dirs,
+        inheritance_only=args.inheritance_only,
+        relationship_only=args.relationship_only,
+        detailed=args.detailed
     )
 
     # Generate HTML report if requested

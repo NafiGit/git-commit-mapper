@@ -18,9 +18,11 @@ def analyze_file_worker(args):
         print(f"Error analyzing file {args[0]}: {str(e)}")
         return None, None
 
-def analyze_commit(repo, commit, output_dir, ascii_only, graphviz_format, show_modules, 
-                  use_color, calculate_code_metrics, cache, parallel, max_processes, 
-                  max_files_per_process, exclude_dirs):
+def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='png', 
+                  show_modules=False, use_color=True, calculate_code_metrics=False, 
+                  cache=None, parallel=True, max_processes=0, max_files_per_process=100, 
+                  exclude_dirs=None, inheritance_only=False, relationship_only=False, 
+                  detailed=False):
     """Analyze a single commit."""
     original_head = repo.head.reference  # Store the original HEAD
     original_working_tree = repo.working_tree_dir
@@ -74,7 +76,14 @@ def analyze_commit(repo, commit, output_dir, ascii_only, graphviz_format, show_m
                 snapshot.update(classes)
                 all_modules.update(modules)
         
-        diagram = generate_ascii_diagram(snapshot, all_modules if show_modules else None, use_color)
+        diagram = generate_ascii_diagram(
+            snapshot, 
+            all_modules if show_modules else None, 
+            use_color,
+            inheritance_only=inheritance_only,
+            relationship_only=relationship_only,
+            detailed=detailed
+        )
         diagram_file = os.path.join(output_dir, f"diagram_{commit.hexsha[:7]}.txt")
         with open(diagram_file, 'w', encoding='utf-8') as f:
             f.write(f"Commit: {commit.hexsha}\nDate: {commit.committed_datetime}\nAuthor: {commit.author.name} <{commit.author.email}>\nMessage: {commit.message.strip()}\n\n{diagram}")
@@ -100,7 +109,8 @@ def analyze_commit(repo, commit, output_dir, ascii_only, graphviz_format, show_m
 
 def analyze_commits(repo_path, output_dir, max_commits, ascii_only, graphviz_format, show_modules, 
                    use_color, calculate_code_metrics, cache_dir, parallel, max_processes, 
-                   max_files_per_process, exclude_dirs):
+                   max_files_per_process, exclude_dirs, inheritance_only=False, 
+                   relationship_only=False, detailed=False):
     """Analyze multiple commits and generate diffs."""
     repo = Repo(repo_path)
     if repo.bare:
@@ -118,7 +128,8 @@ def analyze_commits(repo_path, output_dir, max_commits, ascii_only, graphviz_for
             snapshot = analyze_commit(
                 repo, commit, output_dir, ascii_only, graphviz_format, show_modules,
                 use_color, calculate_code_metrics, cache, parallel, max_processes,
-                max_files_per_process, exclude_dirs
+                max_files_per_process, exclude_dirs, inheritance_only,
+                relationship_only, detailed
             )
             snapshots[commit.hexsha] = snapshot
         
