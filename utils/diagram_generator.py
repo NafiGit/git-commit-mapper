@@ -87,14 +87,29 @@ def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_on
         if cls_name not in drawn_classes and not any(cls_name in children for children in inheritance_tree.values()):
             drawn_classes.update(draw_inheritance(cls_name))
     
-    # Class relationships section
-    diagram.append(f"\n{C.BOLD}{C.CYAN}CLASS RELATIONSHIPS:{C.RESET}")
-    diagram.append(f"{C.CYAN}==================={C.RESET}")
-    
-    drawn_classes = set()
-    for cls_name in classes:
-        if cls_name not in drawn_classes:
-            draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, C=C)
+    # Class relationships section with more detail
+    if not inheritance_only:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}CLASS RELATIONSHIPS:{C.RESET}")
+        diagram.append(f"{C.CYAN}==================={C.RESET}")
+        
+        drawn_classes = set()
+        relationship_graph = {}
+        
+        # Build more detailed relationships
+        for cls_name, details in classes.items():
+            if cls_name not in relationship_graph:
+                relationship_graph[cls_name] = []
+            for composed_class in details.get('composed_classes', set()):
+                relationship_graph[cls_name].append((composed_class, 'composes'))
+            for called_class in details.get('calls', set()):
+                relationship_graph[cls_name].append((called_class, 'calls'))
+            for injected in details.get('injected_dependencies', set()):
+                relationship_graph[cls_name].append((injected, 'depends on'))
+        
+        # Draw relationships
+        for cls_name in classes:
+            if cls_name not in drawn_classes:
+                draw_relationship_graph(diagram, cls_name, relationship_graph, drawn_classes, C=C)
     
     # Class communications section
     diagram.append(f"\n{C.BOLD}{C.CYAN}CLASS COMMUNICATIONS:{C.RESET}")
@@ -103,6 +118,17 @@ def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_on
         diagram.append(f"\n{C.YELLOW}Method Calls:{C.RESET}")
         for src, dest, label, _ in sorted(connections, key=lambda x: (x[0], x[1])):
             diagram.append(f"  {C.GREEN}{src.ljust(15)}{C.RESET} {C.BLUE}───[{C.RESET}{label}{C.BLUE}]──→{C.RESET} {C.MAGENTA}{dest}{C.RESET}")
+    
+    # Add design patterns section
+    patterns = detect_design_patterns(classes)
+    if patterns:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}DESIGN PATTERNS:{C.RESET}")
+        diagram.append(f"{C.CYAN}==============={C.RESET}")
+        for pattern, cls_list in patterns.items():
+            if cls_list:
+                diagram.append(f"{C.YELLOW}{pattern}:{C.RESET}")
+                for cls in cls_list:
+                    diagram.append(f"  {C.GREEN}• {cls}{C.RESET}")
     
     return "\n".join(diagram)
 

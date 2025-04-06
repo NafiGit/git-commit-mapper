@@ -1,5 +1,6 @@
 import ast
 from collections import defaultdict
+import os
 
 def _create_module_dict():
     """Default factory for module dictionary."""
@@ -310,12 +311,6 @@ class CodeAnalyzer(ast.NodeVisitor):
 
 def analyze_python_file(file_path, commit_id=None, cache=None):
     """Analyze a Python file to extract class information."""
-    from utils.cache import AnalysisCache
-    if cache and commit_id:
-        cached_result = cache.get_analysis(file_path, commit_id)
-        if cached_result:
-            return cached_result
-    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             code = f.read()
@@ -323,6 +318,12 @@ def analyze_python_file(file_path, commit_id=None, cache=None):
         analyzer = CodeAnalyzer()
         analyzer.file_path = file_path
         analyzer.visit(tree)
+        
+        # Add module analysis
+        module_name = os.path.basename(file_path).replace('.py', '')
+        if module_name not in analyzer.modules:
+            analyzer.modules[module_name] = _create_module_dict()
+        
         result = (analyzer.classes, analyzer.modules)
         
         if cache and commit_id:
