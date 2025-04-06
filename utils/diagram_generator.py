@@ -217,6 +217,101 @@ def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
     dot.render(output_file, cleanup=True)
     return f"{output_file}.{format}"
 
+def generate_mermaid_diagram(classes, output_file, modules=None, format='png'):
+    """Generate a Mermaid diagram with the same structure as GraphViz."""
+    import os
+    import subprocess
+    import tempfile
+    
+    # Start building the mermaid markdown content
+    mermaid_content = ["classDiagram"]
+    
+    # Add class definitions
+    for cls_name, details in classes.items():
+        # Define class with methods
+        mermaid_content.append(f"    class {cls_name} {{")
+        
+        # Add methods
+        for method in details.get('methods', []):
+            mermaid_content.append(f"        +{method}()")
+            
+        # Add attributes/states
+        for attr in details.get('states', []):
+            mermaid_content.append(f"        -{attr}")
+            
+        # Add props
+        for prop in details.get('props', []):
+            mermaid_content.append(f"        +{prop}")
+            
+        mermaid_content.append("    }")
+    
+    # Add inheritance relationships
+    for cls_name, details in classes.items():
+        for parent in details.get('parent_classes', []):
+            if parent in classes:
+                mermaid_content.append(f"    {parent} <|-- {cls_name}")
+    
+    # Add composition relationships
+    for cls_name, details in classes.items():
+        for composed in details.get('composed_classes', set()):
+            if composed in classes:
+                mermaid_content.append(f"    {cls_name} *-- {composed}")
+    
+    # Add method calls
+    for cls_name, details in classes.items():
+        for call in details.get('calls', set()):
+            if call in classes:
+                mermaid_content.append(f"    {cls_name} ..> {call} : calls")
+    
+    # Add dependencies
+    for cls_name, details in classes.items():
+        for dep in details.get('injected_dependencies', set()):
+            if dep in classes:
+                mermaid_content.append(f"    {cls_name} --> {dep} : depends on")
+    
+    # If modules are provided, add notes to group classes
+    if modules:
+        for module_name, module_info in modules.items():
+            classes_in_module = [cls for cls in module_info.get('classes', []) if cls in classes]
+            if classes_in_module:
+                class_list = ", ".join(classes_in_module)
+                module_id = f"module_{module_name.replace('.', '_')}"
+                mermaid_content.append(f'    note "{module_name}" as {module_id}')
+                for cls in classes_in_module:
+                    mermaid_content.append(f'    {module_id} .. {cls}')
+    
+    # Join the mermaid content
+    mermaid_str = "\n".join(mermaid_content)
+    
+    # Save the mermaid content to a temporary file
+    with tempfile.NamedTemporaryFile('w', suffix='.mmd', delete=False) as mmd_file:
+        mmd_file.write(mermaid_str)
+        mmd_path = mmd_file.name
+    
+    # Generate the output using mmdc (Mermaid CLI)
+    try:
+        # Use mmdc CLI to generate the diagram
+        output_path = f"{output_file}.{format}"
+        subprocess.run(
+            ['npx', 'mmdc', '-i', mmd_path, '-o', output_path, '-t', 'dark'],
+            check=True
+        )
+        os.unlink(mmd_path)  # Remove the temporary file
+        return output_path
+    except subprocess.CalledProcessError:
+        # If mmdc fails, save the mermaid markdown as a backup
+        print("Failed to generate mermaid diagram using mmdc. Saving mermaid code only.")
+        with open(f"{output_file}.mmd", 'w') as f:
+            f.write(mermaid_str)
+        return f"{output_file}.mmd"
+    except FileNotFoundError:
+        # If npx/mmdc is not installed
+        print("Mermaid CLI not found. Please install it with: npm install -g @mermaid-js/mermaid-cli")
+        # Save the mermaid markdown as a fallback
+        with open(f"{output_file}.mmd", 'w') as f:
+            f.write(mermaid_str)
+        return f"{output_file}.mmd"
+
 def _format_class_node(details):
     """Format class node label with detailed information."""
     label_parts = []
