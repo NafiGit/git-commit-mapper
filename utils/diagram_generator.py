@@ -19,6 +19,15 @@ def detect_design_patterns(classes):
         if ('publishes_events' in details and details['publishes_events'] and
             'subscribes_to_events' in details and details['subscribes_to_events']) or 'observer' in details.get('decorator_patterns', set()):
             patterns['Observer'].append(cls_name)
+        
+        if any('execute' in method or 'Command' in method for method in details.get('methods', [])):
+            patterns['Command'].append(cls_name)
+        
+        if any('strategy' in method.lower() for method in details.get('methods', [])):
+            patterns['Strategy'].append(cls_name)
+        
+        if any('adapt' in method.lower() for method in details.get('methods', [])):
+            patterns['Adapter'].append(cls_name)
     
     return patterns
 
@@ -129,6 +138,50 @@ def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_on
                 diagram.append(f"{C.YELLOW}{pattern}:{C.RESET}")
                 for cls in cls_list:
                     diagram.append(f"  {C.GREEN}• {cls}{C.RESET}")
+    
+    # Add Functional Programming Metrics section
+    diagram.append(f"\n{C.BOLD}{C.CYAN}FUNCTIONAL PROGRAMMING METRICS:{C.RESET}")
+    diagram.append(f"{C.CYAN}=============================={C.RESET}")
+    diagram.append(f"\n{C.YELLOW}Lambda Expression Usage:{C.RESET}")
+    for cls_name, details in classes.items():
+        if details.get('lambda_count', 0) > 0:
+            diagram.append(f"  {C.GREEN}{cls_name}{C.RESET}: {C.MAGENTA}{details['lambda_count']}{C.RESET} lambda expression(s)")
+
+    # Add Exception Flow Analysis section
+    diagram.append(f"\n{C.BOLD}{C.CYAN}EXCEPTION FLOW ANALYSIS:{C.RESET}")
+    diagram.append(f"{C.CYAN}======================={C.RESET}")
+    
+    # Exception Propagation
+    diagram.append(f"\n{C.YELLOW}Exception Propagation:{C.RESET}")
+    for cls_name, details in classes.items():
+        if details.get('raises_exceptions'):
+            for exc in details['raises_exceptions']:
+                diagram.append(f"  {C.RED}e{C.RESET} raised by: {C.GREEN}{cls_name}{C.RESET}")
+    
+    # Exception Handling
+    diagram.append(f"\n{C.YELLOW}Exception Handling:{C.RESET}")
+    exception_handlers = defaultdict(list)
+    for cls_name, details in classes.items():
+        if details.get('catches_exceptions'):
+            for exc in details['catches_exceptions']:
+                exception_handlers[exc].append(cls_name)
+    
+    for exc, handlers in sorted(exception_handlers.items()):
+        diagram.append(f"  {C.RED}{exc}{C.RESET} caught by: {C.GREEN}{', '.join(handlers)}{C.RESET}")
+    
+    # Add Decorator-based Patterns section
+    diagram.append(f"\n{C.BOLD}{C.CYAN}DECORATOR-BASED PATTERNS:{C.RESET}")
+    diagram.append(f"{C.CYAN}======================={C.RESET}")
+    
+    decorator_patterns = defaultdict(list)
+    for cls_name, details in classes.items():
+        for pattern in details.get('decorator_patterns', set()):
+            decorator_patterns[pattern].append(cls_name)
+    
+    for pattern, cls_list in decorator_patterns.items():
+        diagram.append(f"\n{C.YELLOW}{pattern} Pattern (via decorators):{C.RESET}")
+        for cls in cls_list:
+            diagram.append(f"  {C.BLUE}⚙{C.RESET} {C.GREEN}{cls}{C.RESET}")
     
     return "\n".join(diagram)
 
