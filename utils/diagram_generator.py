@@ -190,39 +190,56 @@ def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
     dot = graphviz.Digraph(
         comment='Class Diagram', 
         format=format,
-        node_attr={'shape': 'box', 'style': 'rounded,filled', 'fillcolor': 'lightblue'}
+        node_attr={
+            'shape': 'box', 
+            'style': 'rounded,filled', 
+            'fillcolor': 'lightblue',
+            'fontname': 'Helvetica',
+            'fontsize': '10'
+        }
     )
     
     # Add subgraphs for modules if available
     if modules:
         for module_name, module_info in modules.items():
             with dot.subgraph(name=f'cluster_{module_name}') as c:
-                c.attr(label=module_name)
+                c.attr(label=module_name, style='rounded', color='blue')
                 for cls_name in module_info['classes']:
                     if cls_name in classes:
-                        c.node(cls_name, _format_class_node(classes[cls_name]))
+                        # Add class name to details for proper labeling
+                        class_details = classes[cls_name].copy()
+                        class_details['name'] = cls_name
+                        c.node(cls_name, _format_class_node(class_details))
     
     # Add remaining classes
     for cls_name, details in classes.items():
         if not modules or not any(cls_name in m['classes'] for m in modules.values()):
-            dot.node(cls_name, _format_class_node(details))
+            # Add class name to details for proper labeling
+            class_details = details.copy()
+            class_details['name'] = cls_name
+            dot.node(cls_name, _format_class_node(class_details))
     
-    # Add relationships
+    # Add relationships with different colors and styles
     for cls_name, details in classes.items():
-        # Inheritance
+        # Inheritance (blue, solid line, empty arrow)
         for parent in details.get('parent_classes', []):
             if parent in classes:
                 dot.edge(parent, cls_name, arrowhead='empty', style='solid', color='blue')
         
-        # Composition
+        # Composition (dark green, solid line, diamond arrow)
         for composed in details.get('composed_classes', set()):
             if composed in classes:
                 dot.edge(cls_name, composed, arrowhead='diamond', style='solid', color='darkgreen')
         
-        # Method calls
+        # Method calls (red, dashed line, vee arrow)
         for call in details.get('calls', set()):
             if call in classes:
                 dot.edge(cls_name, call, arrowhead='vee', style='dashed', color='red')
+        
+        # Dependencies (gray, dotted line, vee arrow)
+        for dep in details.get('injected_dependencies', set()):
+            if dep in classes:
+                dot.edge(cls_name, dep, arrowhead='vee', style='dotted', color='gray')
     
     dot.render(output_file, cleanup=True)
     return f"{output_file}.{format}"
@@ -230,19 +247,47 @@ def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
 def _format_class_node(details):
     """Format class node label with detailed information."""
     label_parts = []
-    label_parts.append(details.get('name', ''))
     
+    # Add class name
+    label_parts.append(f"{details.get('name', '')}") if 'name' in details else label_parts.append(details.get('class_name', ''))
+    
+    # Add methods section
     if details.get('methods'):
         label_parts.append('Methods:')
-        label_parts.extend(f"  {m}" for m in sorted(details['methods'])[:5])
+        for method in sorted(details['methods'])[:5]:
+            label_parts.append(f"  {method}()")
         if len(details['methods']) > 5:
             label_parts.append('  ...')
     
+    # Add attributes section
     if details.get('attributes'):
         label_parts.append('Attributes:')
-        label_parts.extend(f"  {a}" for a in sorted(details['attributes'])[:3])
+        for attr in sorted(details['attributes'])[:3]:
+            label_parts.append(f"  {attr}")
         if len(details['attributes']) > 3:
             label_parts.append('  ...')
+    
+    # Add states if present
+    if details.get('states'):
+        label_parts.append('States:')
+        for state in sorted(details['states'])[:2]:
+            label_parts.append(f"  {state}")
+        if len(details['states']) > 2:
+            label_parts.append('  ...')
+    
+    # Add props if present
+    if details.get('props'):
+        label_parts.append('Props:')
+        for prop in sorted(details['props'])[:2]:
+            label_parts.append(f"  {prop}")
+        if len(details['props']) > 2:
+            label_parts.append('  ...')
+    
+    # Add design patterns if present
+    if details.get('decorator_patterns'):
+        label_parts.append('Patterns:')
+        for pattern in sorted(details['decorator_patterns'])[:2]:
+            label_parts.append(f"  {pattern}")
     
     return '\\n'.join(label_parts)
 
