@@ -3,7 +3,7 @@ from git import Repo
 import multiprocessing as mp
 from utils.code_analyzer import analyze_python_file
 from utils.cache import AnalysisCache
-from utils.diagram_generator import generate_ascii_diagram, generate_graphviz_diagram
+from utils.diagram_generator import generate_ascii_diagram, generate_plantuml_diagram
 from utils.metrics import calculate_metrics, format_metrics
 from utils.diff_utils import diff_snapshots, format_diff
 
@@ -97,7 +97,7 @@ def analyze_commit(repo, commit, output_dir, ascii_only=False, graphviz_format='
         
         if not ascii_only:
             graphviz_file = os.path.join(output_dir, f"diagram_{commit.hexsha[:7]}")
-            generate_graphviz_diagram(snapshot, graphviz_file, all_modules if show_modules else None, graphviz_format)
+            generate_plantuml_diagram(snapshot, graphviz_file, all_modules if show_modules else None, graphviz_format)
         
         return snapshot
     

@@ -1,10 +1,43 @@
 from collections import defaultdict
-import graphviz
 from utils.colors import Colors
 from utils.design_patterns import DesignPatternDetector
 
-def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_only=False, relationship_only=False, detailed=False):
-    """Generate a comprehensive ASCII diagram with filtering options."""
+import os
+
+# Try importing optional dependencies with fallbacks
+try:
+    import graphviz
+except ImportError:
+    graphviz = None
+
+try:
+    import plantuml
+except ImportError:
+    plantuml = None
+    print("Warning: PlantUML module not found. To enable PlantUML diagrams, run: pip install plantuml six")
+
+def detect_design_patterns(classes):
+    """Detect common design patterns."""
+    patterns = defaultdict(list)
+    
+    for cls_name, details in classes.items():
+        has_instance_var = any('_instance' in attr for attr in details.get('attributes', set()))
+        has_get_instance = any('get_instance' in method or 'getInstance' in method 
+                              for method in details.get('methods', []))
+        if has_instance_var and has_get_instance or 'singleton' in details.get('decorator_patterns', set()):
+            patterns['Singleton'].append(cls_name)
+        
+        if 'factory_methods' in details and details['factory_methods'] or 'factory' in details.get('decorator_patterns', set()):
+            patterns['Factory'].append(cls_name)
+        
+        if ('publishes_events' in details and details['publishes_events'] and
+            'subscribes_to_events' in details and details['subscribes_to_events']) or 'observer' in details.get('decorator_patterns', set()):
+            patterns['Observer'].append(cls_name)
+    
+    return patterns
+
+def generate_ascii_diagram(classes, modules=None, use_color=True):
+    """Generate a comprehensive ASCII diagram."""
     if not classes:
         return "No classes found."
     
@@ -160,6 +193,10 @@ def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_on
 
 def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
     """Generate a GraphViz diagram."""
+    if graphviz is None:
+        print("Warning: Graphviz Python package not found. To enable Graphviz diagrams, run: pip install graphviz")
+        return None
+    
     dot = graphviz.Digraph(
         comment='Class Diagram', 
         format=format,
@@ -214,89 +251,118 @@ def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
             if dep in classes:
                 dot.edge(cls_name, dep, arrowhead='vee', style='dotted', color='gray')
     
-    dot.render(output_file, cleanup=True)
-    return f"{output_file}.{format}"
+    try:
+        dot.render(output_file, cleanup=True)
+        return f"{output_file}.{format}"
+    except Exception as e:
+        print(f"Error rendering GraphViz diagram: {e}")
+        return None
 
-def _format_class_node(details):
-    """Format class node label with detailed information."""
-    label_parts = []
+def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
+    """Generate a PlantUML diagram."""
+    if plantuml is None:
+        print("Warning: PlantUML Python package not found. To enable PlantUML diagrams, run: pip install plantuml six")
+        return None
     
-    # Add class name
-    label_parts.append(f"{details.get('name', '')}") if 'name' in details else label_parts.append(details.get('class_name', ''))
+    # Start PlantUML content
+    plantuml_str = ["@startuml"]
     
-    # Add methods section
-    if details.get('methods'):
-        label_parts.append('Methods:')
-        for method in sorted(details['methods'])[:5]:
-            label_parts.append(f"  {method}()")
-        if len(details['methods']) > 5:
-            label_parts.append('  ...')
+    # Add skinparam to make it look better
+    plantuml_str.append("skinparam classAttributeIconSize 0")
+    plantuml_str.append("skinparam classFontStyle bold")
+    plantuml_str.append("skinparam classFontSize 14")
+    plantuml_str.append("skinparam classBackgroundColor LightBlue")
+    plantuml_str.append("skinparam classBorderColor DarkBlue")
+    plantuml_str.append("skinparam arrowColor #33658A")
+    plantuml_str.append("skinparam packageBackgroundColor WhiteSmoke")
     
-    # Add attributes section
-    if details.get('attributes'):
-        label_parts.append('Attributes:')
-        for attr in sorted(details['attributes'])[:3]:
-            label_parts.append(f"  {attr}")
-        if len(details['attributes']) > 3:
-            label_parts.append('  ...')
+    # If modules exist, organize classes by modules
+    if modules:
+        for module_name, module_info in modules.items():
+            # Sanitize module name for PlantUML
+            safe_module_name = module_name.replace(".", "_dot_")
+            
+            # Create a package for this module
+            plantuml_str.append(f'package "{module_name}" as {safe_module_name} {{')
+            
+            # Add classes that belong to this module
+            for cls_name in module_info.get('classes', []):
+                if cls_name in classes:
+                    # Define the class with its methods
+                    details = classes[cls_name]
+                    plantuml_str.append(f'  class {cls_name} {{')
+                    
+                    # Add methods
+                    for method in details.get('methods', [])[:7]:  # Limit to first 7 for readability
+                        plantuml_str.append(f'    +{method}()')
+                    
+                    # Add attributes/states
+                    for state in details.get('states', [])[:5]:  # Limit to first 5 for readability
+                        plantuml_str.append(f'    -{state}')
+                    
+                    # Add props
+                    for prop in details.get('props', [])[:5]:  # Limit to first 5 for readability
+                        plantuml_str.append(f'    +{prop}')
+                    
+                    plantuml_str.append('  }')
+            
+            plantuml_str.append('}')
+    else:
+        # Add all classes without module organization
+        for cls_name, details in classes.items():
+            plantuml_str.append(f'class {cls_name} {{')
+            
+            # Add methods
+            for method in details.get('methods', [])[:7]:
+                plantuml_str.append(f'  +{method}()')
+            
+            # Add attributes/states
+            for state in details.get('states', [])[:5]:
+                plantuml_str.append(f'  -{state}')
+            
+            # Add props
+            for prop in details.get('props', [])[:5]:
+                plantuml_str.append(f'  +{prop}')
+            
+            plantuml_str.append('}')
     
-    # Add states if present
-    if details.get('states'):
-        label_parts.append('States:')
-        for state in sorted(details['states'])[:2]:
-            label_parts.append(f"  {state}")
-        if len(details['states']) > 2:
-            label_parts.append('  ...')
+    # Add inheritance relationships
+    for cls_name, details in classes.items():
+        for parent in details.get('parent_classes', []):
+            if parent in classes:
+                plantuml_str.append(f'{parent} <|-- {cls_name}')
     
-    # Add props if present
-    if details.get('props'):
-        label_parts.append('Props:')
-        for prop in sorted(details['props'])[:2]:
-            label_parts.append(f"  {prop}")
-        if len(details['props']) > 2:
-            label_parts.append('  ...')
+    # Add composition relationships (these were missing in the original implementation)
+    for cls_name, details in classes.items():
+        for composed in details.get('composed_classes', set()):
+            if composed in classes:
+                plantuml_str.append(f'{cls_name} *-- {composed} : contains')
     
-    # Add design patterns if present
-    if details.get('decorator_patterns'):
-        label_parts.append('Patterns:')
-        for pattern in sorted(details['decorator_patterns'])[:2]:
-            label_parts.append(f"  {pattern}")
+    # Add method calls (these were missing in the original implementation)
+    for cls_name, details in classes.items():
+        for call in details.get('calls', set()):
+            if call in classes:
+                plantuml_str.append(f'{cls_name} ..> {call} : calls')
     
-    return '\\n'.join(label_parts)
-
-def draw_inheritance(class_name, prefix="", is_last=True):
-    """Draw inheritance tree in ASCII format."""
-    lines = []
-    branch = "└── " if is_last else "├── "
-    lines.append(prefix + branch + class_name)
-    child_prefix = prefix + ("    " if is_last else "│   ")
-    return lines
-
-def draw_relationship_graph(diagram, cls_name, graph, drawn_classes, prefix="", is_last=True, C=None):
-    """Draw relationship graph in ASCII format."""
-    if C is None:
-        class DummyColors:
-            RESET = ''
-            BLUE = ''
-            GREEN = ''
-            YELLOW = ''
-            MAGENTA = ''
-            CYAN = ''
-            BOLD = ''
-        C = DummyColors()
-
-    if cls_name in drawn_classes:
-        return
-
-    drawn_classes.add(cls_name)
-    branch = "└── " if is_last else "├── "
-    diagram.append(prefix + branch + f"{C.BOLD}{cls_name}{C.RESET}")
-
-    if cls_name in graph:
-        relationships = sorted(graph[cls_name])
-        for idx, (rel_cls, rel_type) in enumerate(relationships):
-            is_last_child = idx == len(relationships) - 1
-            child_prefix = prefix + ("    " if is_last else "│   ")
-            rel_branch = "└── " if is_last_child else "├── "
-            diagram.append(child_prefix + rel_branch + f"{C.BLUE}[{rel_type}]{C.RESET} {C.MAGENTA}{rel_cls}{C.RESET}")
-            draw_relationship_graph(diagram, rel_cls, graph, drawn_classes, child_prefix, is_last_child, C)
+    # Add dependencies (these were missing in the original implementation)
+    for cls_name, details in classes.items():
+        for dep in details.get('injected_dependencies', set()):
+            if dep in classes:
+                plantuml_str.append(f'{cls_name} --> {dep} : depends on')
+    
+    plantuml_str.append("@enduml")
+    
+    # Write to file
+    puml_file = f"{output_file}.puml"
+    with open(puml_file, 'w') as f:
+        f.write("\n".join(plantuml_str))
+    
+    # Try generating the diagram using PlantUML
+    try:
+        plantuml_instance = plantuml.PlantUML()
+        plantuml_instance.processes_file(puml_file, outfile=f"{output_file}.{format}")
+        return f"{output_file}.{format}"
+    except Exception as e:
+        print(f"Error generating PlantUML diagram: {e}")
+        print(f"PlantUML source file saved to: {puml_file}")
+        return puml_file  # Return the puml file as a fallback
