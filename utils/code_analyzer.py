@@ -314,7 +314,31 @@ def analyze_python_file(file_path, commit_id=None, cache=None):
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             code = f.read()
-        tree = ast.parse(code)
+        
+        # First try to parse with error recovery mode
+        try:
+            tree = ast.parse(code, mode='exec')
+        except SyntaxError as se:
+            # Try to parse with error recovery to get partial AST
+            print(f"\nWarning: Syntax error in {file_path} at line {se.lineno}, column {se.offset}")
+            print(f"Error details: {se.msg}")
+            print(f"Attempting to continue analysis with error recovery...\n")
+            
+            # Try to parse the file ignoring the problematic line
+            lines = code.splitlines()
+            if 0 <= se.lineno - 1 < len(lines):
+                # Comment out the problematic line
+                lines[se.lineno - 1] = '# ' + lines[se.lineno - 1]
+                modified_code = '\n'.join(lines)
+                try:
+                    tree = ast.parse(modified_code, mode='exec')
+                except SyntaxError:
+                    print(f"Failed to recover from syntax error in {file_path}")
+                    return {}, {}
+            else:
+                print(f"Failed to locate error line in {file_path}")
+                return {}, {}
+        
         analyzer = CodeAnalyzer()
         analyzer.file_path = file_path
         analyzer.visit(tree)
@@ -331,5 +355,7 @@ def analyze_python_file(file_path, commit_id=None, cache=None):
             
         return result
     except Exception as e:
-        print(f"Error analyzing {file_path}: {str(e)}")
+        print(f"\nError analyzing {file_path}: {str(e)}")
+        print("This error is not a syntax error and might indicate a more serious problem.")
+        print("Please check the file and its dependencies.\n")
         return {}, {}
