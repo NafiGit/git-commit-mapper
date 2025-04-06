@@ -204,7 +204,7 @@ def generate_single_file_diagram(file_path: str, output_dir: str) -> Tuple[str, 
     classes, relationships = analyze_single_file(file_path)
     
     # Generate ASCII diagram
-    from utils.diagram_generator import generate_ascii_diagram
+    from utils.commits.diagram_generator import generate_ascii_diagram
     ascii_diagram = generate_ascii_diagram(
         classes,
         None,  # No module information for single file
@@ -221,7 +221,7 @@ def generate_single_file_diagram(file_path: str, output_dir: str) -> Tuple[str, 
         f.write(ascii_diagram)
     
     # Generate GraphViz diagram
-    from utils.diagram_generator import generate_graphviz_diagram
+    from utils.commits.diagram_generator import generate_graphviz_diagram
     graphviz_file = os.path.join(output_dir, f"{file_name}_diagram")
     generate_graphviz_diagram(
         classes,

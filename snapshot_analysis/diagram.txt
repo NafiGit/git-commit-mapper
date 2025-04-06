@@ -1213,14 +1213,3 @@
 
 [33msingleton Pattern (via decorators):[0m
   [34m⚙[0m [32mProductTelemetry[0m
-
-[1m[36mFILE ASSOCIATIONS:[0m
-[36m=================[0m
-
-[34mFile: /home/ubuntu/Desktop/browser-use/examples/custom_system_prompt.py[0m
-[32m  Inherits from:[0m
-    → /home/ubuntu/Desktop/browser-use/browser_use/agent/prompts.py
-
-[34mFile: /home/ubuntu/Desktop/browser-use/browser_use/browser/views.py[0m
-[32m  Inherits from:[0m
-    → /home/ubuntu/Desktop/browser-use/browser_use/dom/views.py
