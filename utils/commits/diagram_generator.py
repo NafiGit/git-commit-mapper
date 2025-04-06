@@ -1,9 +1,9 @@
 from collections import defaultdict
 import graphviz
-from utils.colors import Colors
-from utils.design_patterns import DesignPatternDetector
+from utils.commits.colors import Colors
+from utils.commits.design_patterns import DesignPatternDetector
 
-def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_only=False, relationship_only=False, detailed=False):
+def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_only=False, relationship_only=False, detailed=False, show_file_associations=False):
     """Generate a comprehensive ASCII diagram with filtering options."""
     if not classes:
         return "No classes found."
@@ -155,6 +155,41 @@ def generate_ascii_diagram(classes, modules=None, use_color=True, inheritance_on
         diagram.append(f"\n{C.YELLOW}{pattern} Pattern (via decorators):{C.RESET}")
         for cls in cls_list:
             diagram.append(f"  {C.BLUE}⚙{C.RESET} {C.GREEN}{cls}{C.RESET}")
+    
+    if show_file_associations and detailed:
+        diagram.append(f"\n{C.BOLD}{C.CYAN}FILE ASSOCIATIONS:{C.RESET}")
+        diagram.append(f"{C.CYAN}================={C.RESET}")
+        
+        file_associations_seen = set()
+        for cls_name, details in classes.items():
+            if 'file_associations' in details:
+                file_info = details['file_associations']
+                file_path = file_info['file']
+                
+                if file_path not in file_associations_seen:
+                    file_associations_seen.add(file_path)
+                    diagram.append(f"\n{C.BLUE}File: {file_path}{C.RESET}")
+                    
+                    assocs = file_info['associated_files']
+                    if assocs['inherits_from']:
+                        diagram.append(f"{C.GREEN}  Inherits from:{C.RESET}")
+                        for f in assocs['inherits_from']:
+                            diagram.append(f"    → {f}")
+                    
+                    if assocs['depends_on']:
+                        diagram.append(f"{C.YELLOW}  Depends on:{C.RESET}")
+                        for f in assocs['depends_on']:
+                            diagram.append(f"    → {f}")
+                    
+                    if assocs['composes']:
+                        diagram.append(f"{C.MAGENTA}  Composes:{C.RESET}")
+                        for f in assocs['composes']:
+                            diagram.append(f"    → {f}")
+                    
+                    if assocs['calls']:
+                        diagram.append(f"{C.CYAN}  Calls:{C.RESET}")
+                        for f in assocs['calls']:
+                            diagram.append(f"    → {f}")
     
     return "\n".join(diagram)
 

@@ -1,11 +1,11 @@
 import os
 from git import Repo
 import multiprocessing as mp
-from utils.code_analyzer import analyze_python_file
-from utils.cache import AnalysisCache
-from utils.diagram_generator import generate_ascii_diagram, generate_graphviz_diagram
-from utils.metrics import calculate_metrics, format_metrics
-from utils.diff_utils import diff_snapshots, format_diff
+from utils.commits.code_analyzer import analyze_python_file
+from utils.commits.cache import AnalysisCache
+from utils.commits.diagram_generator import generate_ascii_diagram, generate_graphviz_diagram
+from utils.commits.metrics import calculate_metrics, format_metrics
+from utils.commits.diff_utils import diff_snapshots, format_diff
 
 def analyze_file_worker(args):
     """Worker function for parallel file analysis."""

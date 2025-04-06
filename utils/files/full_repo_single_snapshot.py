@@ -7,15 +7,16 @@ This tool analyzes all Python files in the given directory without git history.
 import argparse
 import os
 from collections import defaultdict
-from utils.code_analyzer import analyze_python_file
-from utils.diagram_generator import generate_ascii_diagram, generate_graphviz_diagram
-from utils.design_patterns import DesignPatternDetector
-from utils.metrics import calculate_metrics, format_metrics
-from utils.colors import Colors
-from utils.html_report import generate_html_report
-from utils.cache import AnalysisCache
+from utils.commits.code_analyzer import analyze_python_file
+from utils.commits.diagram_generator import generate_ascii_diagram, generate_graphviz_diagram
+from utils.commits.design_patterns import DesignPatternDetector
+from utils.commits.metrics import calculate_metrics, format_metrics
+from utils.commits.colors import Colors
+from utils.commits.html_report import generate_html_report
+from utils.commits.cache import AnalysisCache
 from multiprocessing import Pool, cpu_count
-from utils.class_diagram_single_file import generate_single_file_diagram
+from utils.files.class_diagram_single_file import generate_single_file_diagram
+from utils.files.associations_between_files import analyze_file_associations
 
 def _create_module_dict():
     """Default factory for module dictionary."""
@@ -34,23 +35,32 @@ def analyze_file_worker(args):
             diagrams_dir = os.path.join(os.path.dirname(file_path), 'diagrams')
             os.makedirs(diagrams_dir, exist_ok=True)
             
-            # Generate individual file diagram
-            ascii_file, graphviz_file = generate_single_file_diagram(
-                file_path,
-                diagrams_dir
-            )
-            
-            if ascii_file and graphviz_file:
-                print(f"Generated diagrams for {file_path}:")
-                print(f"  ASCII: {ascii_file}")
-                print(f"  GraphViz: {graphviz_file}")
-            
-            # Return the analysis results for the full repository diagram
-            return analyze_python_file(file_path, 'current', cache)
+            try:
+                # Generate individual file diagram
+                ascii_file, graphviz_file = generate_single_file_diagram(
+                    file_path,
+                    diagrams_dir
+                )
+                
+                if ascii_file and graphviz_file:
+                    print(f"Generated diagrams for {file_path}:")
+                    print(f"  ASCII: {ascii_file}")
+                    print(f"  GraphViz: {graphviz_file}")
+                
+                # Return the analysis results for the full repository diagram
+                classes, modules = analyze_python_file(file_path, 'current', cache)
+                if not classes:
+                    print(f"Warning: No classes found in {file_path}")
+                return classes, modules
+                
+            except Exception as e:
+                print(f"Warning: Error analyzing file {file_path}: {str(e)}")
+                return {}, {}
+                
         return None, None
     except Exception as e:
-        print(f"Error analyzing file {file_path}: {str(e)}")
-        return None, None
+        print(f"Error in worker for {args[0] if args else 'unknown file'}: {str(e)}")
+        return {}, {}
 
 def analyze_directory(directory_path, exclude_dirs=None, parallel=True, max_processes=0, cache=None):
     """
@@ -74,7 +84,7 @@ def analyze_directory(directory_path, exclude_dirs=None, parallel=True, max_proc
     if not os.path.exists(directory_path):
         raise ValueError(f"Directory does not exist: {directory_path}")
     
-    print(f"Scanning directory: {directory_path}")
+    print(f"\nScanning directory: {directory_path}")
     python_files = []
     
     for root, dirs, files in os.walk(directory_path):
@@ -96,7 +106,7 @@ def analyze_directory(directory_path, exclude_dirs=None, parallel=True, max_proc
     
     if parallel and len(python_files) > 1 and cpu_count() > 1:
         num_processes = min(max_processes if max_processes > 0 else cpu_count(), len(python_files))
-        print(f"Analyzing {len(python_files)} files using {num_processes} processes...")
+        print(f"\nAnalyzing {len(python_files)} files using {num_processes} processes...")
         
         with Pool(processes=num_processes) as pool:
             worker_args = [(file_path, cache) for file_path in python_files]
@@ -105,14 +115,37 @@ def analyze_directory(directory_path, exclude_dirs=None, parallel=True, max_proc
             for classes, modules in results:
                 if classes and modules:
                     all_classes.update(classes)
-                    all_modules.update(modules)
+                    for module_name, module_info in modules.items():
+                        all_modules[module_name]['classes'].update(module_info['classes'])
+                        all_modules[module_name]['imported_modules'].update(module_info['imported_modules'])
+                        all_modules[module_name]['exporting_to'].update(module_info['exporting_to'])
     else:
-        print(f"Analyzing {len(python_files)} files sequentially...")
+        print(f"\nAnalyzing {len(python_files)} files sequentially...")
         for file_path in python_files:
             classes, modules = analyze_file_worker((file_path, cache))
             if classes and modules:
                 all_classes.update(classes)
-                all_modules.update(modules)
+                for module_name, module_info in modules.items():
+                    all_modules[module_name]['classes'].update(module_info['classes'])
+                    all_modules[module_name]['imported_modules'].update(module_info['imported_modules'])
+                    all_modules[module_name]['exporting_to'].update(module_info['exporting_to'])
+    
+    # Then analyze associations between files
+    print("\nAnalyzing associations between files...")
+    file_associations = analyze_file_associations(python_files)
+    
+    # Add file association information to the output
+    for file_path, assoc_info in file_associations.items():
+        module_name = os.path.basename(file_path).replace('.py', '')
+        all_modules[module_name]['file_associations'] = assoc_info['associations']
+        
+        # Add association information to classes
+        for class_name in assoc_info['classes']:
+            if class_name in all_classes:
+                all_classes[class_name]['file_associations'] = {
+                    'file': file_path,
+                    'associated_files': assoc_info['associations']
+                }
     
     return all_classes, all_modules
 
@@ -163,7 +196,7 @@ def main():
             print("No classes found in the repository.")
             return 1
         
-        # Generate ASCII diagram
+        # Generate ASCII diagram with file associations
         print("Generating ASCII diagram...")
         ascii_diagram = generate_ascii_diagram(
             classes,
@@ -171,7 +204,8 @@ def main():
             use_color=not args.no_color,
             inheritance_only=args.inheritance_only,
             relationship_only=args.relationship_only,
-            detailed=args.detailed
+            detailed=args.detailed,
+            show_file_associations=True
         )
         
         # Save ASCII diagram

@@ -8,8 +8,8 @@ import ast
 from collections import defaultdict
 from typing import Dict, Set, Tuple, Any, Optional
 import os
-from utils.code_analyzer import CodeAnalyzer, _create_module_dict
-from utils.design_patterns import DesignPatternDetector
+from utils.commits.code_analyzer import CodeAnalyzer, _create_module_dict
+from utils.commits.design_patterns import DesignPatternDetector
 
 class SingleFileAnalyzer(ast.NodeVisitor):
     """Analyzes a single Python file to extract class relationships and associations."""
@@ -61,7 +61,7 @@ class SingleFileAnalyzer(ast.NodeVisitor):
         prev_class = self.current_class
         self.current_class = node.name
         
-        # Initialize class data structure
+        # Initialize class data structure with all required fields
         self.classes[node.name] = {
             'methods': [],
             'attributes': set(),
@@ -73,7 +73,19 @@ class SingleFileAnalyzer(ast.NodeVisitor):
             'dependencies': set(),
             'associations': set(),
             'compositions': set(),
-            'aggregations': set()
+            'aggregations': set(),
+            'states': set(),  # Added missing field
+            'props': set(),   # Added missing field
+            'serializers': set(), # Added missing field
+            'calls': set(),   # Added missing field
+            'api_calls': set(), # Added missing field
+            'raises_exceptions': set(), # Added missing field
+            'catches_exceptions': set(), # Added missing field
+            'lambda_count': 0, # Added missing field
+            'generator_count': 0, # Added missing field
+            'context_managers': set(), # Added missing field
+            'decorator_patterns': set(), # Added missing field
+            'decorators': set() # Added missing field
         }
         
         # Handle inheritance

@@ -1,7 +1,7 @@
 from datetime import datetime
-from utils.diagram_generator import generate_ascii_diagram
-from utils.metrics import calculate_metrics, format_metrics
-from utils.diff_utils import diff_snapshots, format_diff
+from utils.commits.diagram_generator import generate_ascii_diagram
+from utils.commits.metrics import calculate_metrics, format_metrics
+from utils.commits.diff_utils import diff_snapshots, format_diff
 
 def generate_html_report(snapshots, commits, output_dir):
     """Generate an interactive HTML report."""

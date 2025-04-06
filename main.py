@@ -6,8 +6,8 @@ Main entry point for the Git Commit Class Diagram and Communication Mapping Tool
 import sys
 import argparse
 import os
-from utils.git_utils import analyze_commits
-from utils.html_report import generate_html_report
+from utils.commits.git_utils import analyze_commits
+from utils.commits.html_report import generate_html_report
 
 def main():
     """Parse CLI arguments and orchestrate the analysis."""
