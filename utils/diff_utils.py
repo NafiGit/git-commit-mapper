@@ -6,15 +6,31 @@ def diff_snapshots(old_snapshot, new_snapshot):
         'modified_classes': {}
     }
     
+    # Compare classes that exist in both snapshots
     for class_name in set(old_snapshot.keys()) & set(new_snapshot.keys()):
         old_class = old_snapshot[class_name]
         new_class = new_snapshot[class_name]
         changes = {}
         
+        # Check methods
         if set(new_class['methods']) != set(old_class['methods']):
             changes['methods'] = {
                 'added': list(set(new_class['methods']) - set(old_class['methods'])),
                 'removed': list(set(old_class['methods']) - set(new_class['methods']))
+            }
+        
+        # Check attributes
+        if set(new_class.get('attributes', set())) != set(old_class.get('attributes', set())):
+            changes['attributes'] = {
+                'added': list(set(new_class.get('attributes', set())) - set(old_class.get('attributes', set()))),
+                'removed': list(set(old_class.get('attributes', set())) - set(new_class.get('attributes', set())))
+            }
+        
+        # Check relationships
+        if set(new_class.get('calls', set())) != set(old_class.get('calls', set())):
+            changes['calls'] = {
+                'added': list(set(new_class.get('calls', set())) - set(old_class.get('calls', set()))),
+                'removed': list(set(old_class.get('calls', set())) - set(new_class.get('calls', set())))
             }
         
         if changes:
@@ -46,6 +62,7 @@ def format_diff(diff, old_commit_id, new_commit_id):
         lines.append("MODIFIED CLASSES:")
         for class_name, changes in sorted(diff['modified_classes'].items()):
             lines.append(f"  * {class_name}:")
+            
             if 'methods' in changes:
                 if changes['methods']['added']:
                     lines.append("      Added methods:")
@@ -55,6 +72,27 @@ def format_diff(diff, old_commit_id, new_commit_id):
                     lines.append("      Removed methods:")
                     for method in sorted(changes['methods']['removed']):
                         lines.append(f"        - {method}()")
+            
+            if 'attributes' in changes:
+                if changes['attributes']['added']:
+                    lines.append("      Added attributes:")
+                    for attr in sorted(changes['attributes']['added']):
+                        lines.append(f"        + {attr}")
+                if changes['attributes']['removed']:
+                    lines.append("      Removed attributes:")
+                    for attr in sorted(changes['attributes']['removed']):
+                        lines.append(f"        - {attr}")
+            
+            if 'calls' in changes:
+                if changes['calls']['added']:
+                    lines.append("      Added calls:")
+                    for call in sorted(changes['calls']['added']):
+                        lines.append(f"        + {call}")
+                if changes['calls']['removed']:
+                    lines.append("      Removed calls:")
+                    for call in sorted(changes['calls']['removed']):
+                        lines.append(f"        - {call}")
+            
             lines.append("")
     
     return "\n".join(lines)

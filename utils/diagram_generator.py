@@ -193,19 +193,58 @@ def generate_graphviz_diagram(classes, output_file, modules=None, format='png'):
         node_attr={'shape': 'box', 'style': 'rounded,filled', 'fillcolor': 'lightblue'}
     )
     
-    for cls_name, details in classes.items():
-        label = f"{cls_name}\\n--------------------\\n"
-        if details['methods']:
-            label += "\\nMethods:\\n" + "\\n".join(details['methods'][:5])
-        dot.node(cls_name, label=label)
+    # Add subgraphs for modules if available
+    if modules:
+        for module_name, module_info in modules.items():
+            with dot.subgraph(name=f'cluster_{module_name}') as c:
+                c.attr(label=module_name)
+                for cls_name in module_info['classes']:
+                    if cls_name in classes:
+                        c.node(cls_name, _format_class_node(classes[cls_name]))
     
+    # Add remaining classes
     for cls_name, details in classes.items():
+        if not modules or not any(cls_name in m['classes'] for m in modules.values()):
+            dot.node(cls_name, _format_class_node(details))
+    
+    # Add relationships
+    for cls_name, details in classes.items():
+        # Inheritance
         for parent in details.get('parent_classes', []):
             if parent in classes:
                 dot.edge(parent, cls_name, arrowhead='empty', style='solid', color='blue')
+        
+        # Composition
+        for composed in details.get('composed_classes', set()):
+            if composed in classes:
+                dot.edge(cls_name, composed, arrowhead='diamond', style='solid', color='darkgreen')
+        
+        # Method calls
+        for call in details.get('calls', set()):
+            if call in classes:
+                dot.edge(cls_name, call, arrowhead='vee', style='dashed', color='red')
     
     dot.render(output_file, cleanup=True)
     return f"{output_file}.{format}"
+
+def _format_class_node(details):
+    """Format class node label with detailed information."""
+    label_parts = []
+    label_parts.append(details.get('name', ''))
+    
+    if details.get('methods'):
+        label_parts.append('Methods:')
+        label_parts.extend(f"  {m}" for m in sorted(details['methods'])[:5])
+        if len(details['methods']) > 5:
+            label_parts.append('  ...')
+    
+    if details.get('attributes'):
+        label_parts.append('Attributes:')
+        label_parts.extend(f"  {a}" for a in sorted(details['attributes'])[:3])
+        if len(details['attributes']) > 3:
+            label_parts.append('  ...')
+    
+    return '\\n'.join(label_parts)
 
 def draw_inheritance(class_name, prefix="", is_last=True):
     """Draw inheritance tree in ASCII format."""
