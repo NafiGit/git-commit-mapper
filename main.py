@@ -13,7 +13,7 @@ from utils.url_cloner import clone_github_repo
 def main():
     """Parse CLI arguments and orchestrate the analysis."""
     parser = argparse.ArgumentParser(description='Generate class diagrams and communication maps from Git commits')
-    parser.add_argument('repo_path', help='Path to the Git repository')
+    parser.add_argument('repo_path', nargs='?', default="current_repo", help='Path to the Git repository')
     parser.add_argument('--output-dir', '-o', default='diagrams', help='Output directory for diagrams and diffs')
     parser.add_argument('--max-commits', '-n', type=int, default=10, help='Maximum number of commits to analyze')
     parser.add_argument('--skip-env', '-s', action='store_true', help='Skip virtual environment directories')
