@@ -1,3 +1,4 @@
 diagrams
 instruct.md
 .analysis_cache
+__pycache__
