@@ -2,3 +2,7 @@ diagrams
 instruct.md
 .analysis_cache
 __pycache__
+analysis_cache
+analysis_output
+.DS_Store
+results
