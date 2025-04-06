@@ -15,6 +15,7 @@ from utils.colors import Colors
 from utils.html_report import generate_html_report
 from utils.cache import AnalysisCache
 from multiprocessing import Pool, cpu_count
+from utils.class_diagram_single_file import generate_single_file_diagram
 
 def _create_module_dict():
     """Default factory for module dictionary."""
@@ -29,6 +30,22 @@ def analyze_file_worker(args):
     try:
         file_path, cache = args
         if file_path.endswith('.py'):
+            # Create diagrams directory in the same directory as the file
+            diagrams_dir = os.path.join(os.path.dirname(file_path), 'diagrams')
+            os.makedirs(diagrams_dir, exist_ok=True)
+            
+            # Generate individual file diagram
+            ascii_file, graphviz_file = generate_single_file_diagram(
+                file_path,
+                diagrams_dir
+            )
+            
+            if ascii_file and graphviz_file:
+                print(f"Generated diagrams for {file_path}:")
+                print(f"  ASCII: {ascii_file}")
+                print(f"  GraphViz: {graphviz_file}")
+            
+            # Return the analysis results for the full repository diagram
             return analyze_python_file(file_path, 'current', cache)
         return None, None
     except Exception as e:
@@ -50,7 +67,7 @@ def analyze_directory(directory_path, exclude_dirs=None, parallel=True, max_proc
         tuple: (classes_dict, modules_dict)
     """
     exclude_dirs = exclude_dirs or []
-    exclude_dirs.extend(['.git', 'env', 'venv', 'site-packages', '__pycache__'])
+    exclude_dirs.extend(['.git', 'env', 'venv', 'site-packages', '__pycache__', 'diagrams'])
     
     # Normalize and resolve the directory path
     directory_path = os.path.abspath(os.path.expanduser(directory_path))
@@ -121,8 +138,12 @@ def main():
     
     args = parser.parse_args()
     
-    # Ensure output directory exists
+    # Create main output directory
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Create a diagrams directory in the repository root
+    repo_diagrams_dir = os.path.join(args.path, 'diagrams')
+    os.makedirs(repo_diagrams_dir, exist_ok=True)
     
     # Initialize cache if enabled
     cache = None if args.no_cache else AnalysisCache(args.cache_dir)
