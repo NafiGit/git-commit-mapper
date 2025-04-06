@@ -276,6 +276,16 @@ def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
     plantuml_str.append("skinparam arrowColor #33658A")
     plantuml_str.append("skinparam packageBackgroundColor WhiteSmoke")
     
+    # Function to safely get limited items from a collection
+    def safe_limit(collection, limit):
+        """Get first N items from a collection, handling both lists and sets."""
+        if not collection:
+            return []
+        # Convert to list if it's not already
+        if not isinstance(collection, list):
+            collection = list(collection)
+        return collection[:limit]
+    
     # If modules exist, organize classes by modules
     if modules:
         for module_name, module_info in modules.items():
@@ -292,16 +302,16 @@ def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
                     details = classes[cls_name]
                     plantuml_str.append(f'  class {cls_name} {{')
                     
-                    # Add methods
-                    for method in details.get('methods', [])[:7]:  # Limit to first 7 for readability
+                    # Add methods - safely limit to 7
+                    for method in safe_limit(details.get('methods', []), 7):
                         plantuml_str.append(f'    +{method}()')
                     
-                    # Add attributes/states
-                    for state in details.get('states', [])[:5]:  # Limit to first 5 for readability
+                    # Add attributes/states - safely limit to 5
+                    for state in safe_limit(details.get('states', []), 5):
                         plantuml_str.append(f'    -{state}')
                     
-                    # Add props
-                    for prop in details.get('props', [])[:5]:  # Limit to first 5 for readability
+                    # Add props - safely limit to 5
+                    for prop in safe_limit(details.get('props', []), 5):
                         plantuml_str.append(f'    +{prop}')
                     
                     plantuml_str.append('  }')
@@ -312,16 +322,16 @@ def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
         for cls_name, details in classes.items():
             plantuml_str.append(f'class {cls_name} {{')
             
-            # Add methods
-            for method in details.get('methods', [])[:7]:
+            # Add methods - safely limit to 7
+            for method in safe_limit(details.get('methods', []), 7):
                 plantuml_str.append(f'  +{method}()')
             
-            # Add attributes/states
-            for state in details.get('states', [])[:5]:
+            # Add attributes/states - safely limit to 5
+            for state in safe_limit(details.get('states', []), 5):
                 plantuml_str.append(f'  -{state}')
             
-            # Add props
-            for prop in details.get('props', [])[:5]:
+            # Add props - safely limit to 5
+            for prop in safe_limit(details.get('props', []), 5):
                 plantuml_str.append(f'  +{prop}')
             
             plantuml_str.append('}')
@@ -332,23 +342,29 @@ def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
             if parent in classes:
                 plantuml_str.append(f'{parent} <|-- {cls_name}')
     
-    # Add composition relationships (these were missing in the original implementation)
+    # Add composition relationships
     for cls_name, details in classes.items():
-        for composed in details.get('composed_classes', set()):
-            if composed in classes:
-                plantuml_str.append(f'{cls_name} *-- {composed} : contains')
+        composed_classes = details.get('composed_classes', set())
+        if composed_classes:
+            for composed in composed_classes:
+                if composed in classes:
+                    plantuml_str.append(f'{cls_name} *-- {composed} : contains')
     
-    # Add method calls (these were missing in the original implementation)
+    # Add method calls
     for cls_name, details in classes.items():
-        for call in details.get('calls', set()):
-            if call in classes:
-                plantuml_str.append(f'{cls_name} ..> {call} : calls')
+        calls = details.get('calls', set())
+        if calls:
+            for call in calls:
+                if call in classes:
+                    plantuml_str.append(f'{cls_name} ..> {call} : calls')
     
-    # Add dependencies (these were missing in the original implementation)
+    # Add dependencies
     for cls_name, details in classes.items():
-        for dep in details.get('injected_dependencies', set()):
-            if dep in classes:
-                plantuml_str.append(f'{cls_name} --> {dep} : depends on')
+        dependencies = details.get('injected_dependencies', set())
+        if dependencies:
+            for dep in dependencies:
+                if dep in classes:
+                    plantuml_str.append(f'{cls_name} --> {dep} : depends on')
     
     plantuml_str.append("@enduml")
     
@@ -359,10 +375,27 @@ def generate_plantuml_diagram(classes, output_file, modules=None, format='png'):
     
     # Try generating the diagram using PlantUML
     try:
-        plantuml_instance = plantuml.PlantUML()
+        # Fix: Provide the default URL for PlantUML server
+        plantuml_instance = plantuml.PlantUML(url='http://www.plantuml.com/plantuml/img/')
         plantuml_instance.processes_file(puml_file, outfile=f"{output_file}.{format}")
         return f"{output_file}.{format}"
     except Exception as e:
-        print(f"Error generating PlantUML diagram: {e}")
+        # Improved error handling with explicit error details
+        error_type = type(e).__name__
+        error_details = str(e)
+        print(f"Error generating PlantUML diagram: {error_type} - {error_details}")
         print(f"PlantUML source file saved to: {puml_file}")
+        
+        # Alternative approach: Use local command-line generation if available
+        try:
+            import subprocess
+            print("Trying local PlantUML generation...")
+            subprocess.run(['java', '-jar', 'plantuml.jar', '-t' + format, puml_file], 
+                           check=True, timeout=60)
+            if os.path.exists(f"{output_file}.{format}"):
+                print(f"Successfully generated diagram with local PlantUML")
+                return f"{output_file}.{format}"
+        except Exception:
+            pass  # Silently ignore if local generation fails
+            
         return puml_file  # Return the puml file as a fallback
