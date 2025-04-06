@@ -8,11 +8,12 @@ import argparse
 import os
 from utils.commits.git_utils import analyze_commits
 from utils.commits.html_report import generate_html_report
+from utils.url_cloner import clone_github_repo
 
 def main():
     """Parse CLI arguments and orchestrate the analysis."""
     parser = argparse.ArgumentParser(description='Generate class diagrams and communication maps from Git commits')
-    parser.add_argument('repo_path', help='Path to the Git repository')
+    parser.add_argument('repo_path', nargs='?', default="current_repo", help='Path to the Git repository')
     parser.add_argument('--output-dir', '-o', default='diagrams', help='Output directory for diagrams and diffs')
     parser.add_argument('--max-commits', '-n', type=int, default=10, help='Maximum number of commits to analyze')
     parser.add_argument('--skip-env', '-s', action='store_true', help='Skip virtual environment directories')
@@ -31,7 +32,18 @@ def main():
     parser.add_argument('--inheritance-only', action='store_true', help='Show only inheritance relationships')
     parser.add_argument('--relationship-only', action='store_true', help='Show only class relationships')
     parser.add_argument('--detailed', '-d', action='store_true', help='Show detailed class information')
+    parser.add_argument('--clone-url', help='GitHub URL to clone before analysis (repo_path will be used as clone destination)')
     args = parser.parse_args()
+
+    # Clone the repository if a URL is provided
+    if args.clone_url:
+        try:
+            print(f"Cloning repository from {args.clone_url}...")
+            clone_github_repo(args.clone_url, args.repo_path)
+            print(f"Repository cloned successfully to {args.repo_path}")
+        except Exception as e:
+            print(f"Error cloning repository: {e}")
+            return 1
 
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
