@@ -6,3 +6,5 @@ analysis_cache
 analysis_output
 .DS_Store
 results
+git-commit-node
+cloned_repo_test
